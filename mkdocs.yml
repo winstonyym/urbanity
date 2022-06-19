@@ -12,9 +12,10 @@ theme:
         repo: fontawesome/brands/github
     features:
         - navigation.instant
+        - navigation.tracking
+        - navigation.top
         - search.highlight
-        # - navigation.expand
-        # - navigation.tabs
+        - search.share
     custom_dir: "docs/overrides"
 
 plugins:
