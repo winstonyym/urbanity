@@ -7,7 +7,7 @@ repo_url: https://github.com/winstonyym/urbanity
 theme:
     palette:
         scheme: preference
-    name: material
+    name: readthedocs
     icon:
         repo: fontawesome/brands/github
     features:
@@ -20,19 +20,12 @@ theme:
 
 plugins:
     - search
-    - mkdocstrings
-    - git-revision-date
-    - mkdocs-jupyter:
-          include_source: True
         #   ignore_h1_titles: True
         #   execute: True
         #   execute_ignore: "*.ipynb"
           
 markdown_extensions:
     - attr_list
-    - pymdownx.superfences
-    - pymdownx.highlight:
-          linenums: true
     - toc:
           permalink: true
 
