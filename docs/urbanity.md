@@ -1,4 +1,0 @@
- 
-# urbanity module
-
-::: urbanity.urbanity
