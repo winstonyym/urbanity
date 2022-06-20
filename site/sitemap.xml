@@ -6,6 +6,11 @@
          <changefreq>daily</changefreq>
     </url>
     <url>
+         <loc>https://winstonyym.github.io/urbanity/apple/</loc>
+         <lastmod>2022-06-20</lastmod>
+         <changefreq>daily</changefreq>
+    </url>
+    <url>
          <loc>https://winstonyym.github.io/urbanity/changelog/</loc>
          <lastmod>2022-06-20</lastmod>
          <changefreq>daily</changefreq>
@@ -31,7 +36,17 @@
          <changefreq>daily</changefreq>
     </url>
     <url>
+         <loc>https://winstonyym.github.io/urbanity/urbanity_more/</loc>
+         <lastmod>2022-06-20</lastmod>
+         <changefreq>daily</changefreq>
+    </url>
+    <url>
          <loc>https://winstonyym.github.io/urbanity/usage/</loc>
+         <lastmod>2022-06-20</lastmod>
+         <changefreq>daily</changefreq>
+    </url>
+    <url>
+         <loc>https://winstonyym.github.io/urbanity/notebooks/test/</loc>
          <lastmod>2022-06-20</lastmod>
          <changefreq>daily</changefreq>
     </url>
