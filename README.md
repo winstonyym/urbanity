@@ -12,7 +12,7 @@
 -   Free software: [MIT license](https://opensource.org/licenses/MIT)
 
 
-
+Added conda support
 
 
 
