@@ -62,15 +62,6 @@ jobs:
       - name: Install package
         run: poetry install
 
-      - name: Use Python Semantic Release to prepare release
-        env:
-          # This token is created automatically by GH Actions
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: |
-            git config user.name github-actions
-            git config user.email github-actions@github.com
-            poetry run semantic-release publish
-
       - name: Publish to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:

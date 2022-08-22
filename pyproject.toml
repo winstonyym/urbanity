@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "urbanity"
-version = "0.1.0"
+version = "0.1.1"
 description = "Urbanity is a python package to model and understand urban complexity."
 authors = ["winstonyym"]
 license = "MIT"
