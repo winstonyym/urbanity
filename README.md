@@ -1,6 +1,6 @@
 # urbanity
 
-Urbanity is a python package to model and understand urban complexity.
+Urbanity is a python package to model and understand urban complexity. This package is currently under development.
 
 ## Installation
 
