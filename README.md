@@ -1,10 +1,10 @@
 # urbanity
 
-Urbanity is a e to model and understand urban complexity.
+Urbanity is a python package to model and understand urban complexity.
 
 ## Installation
 
-```bash
+```Terminal
 $ pip install urbanity
 ```
 
