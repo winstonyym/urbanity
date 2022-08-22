@@ -1,0 +1,92 @@
+name: ci-cd
+
+on: [push, pull_request]
+
+jobs:
+  ci:
+    # Set up operating system
+    runs-on: ubuntu-latest
+
+    # Define job steps
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.9"
+
+      - name: Check-out repository
+        uses: actions/checkout@v2
+
+      - name: Install poetry
+        uses: snok/install-poetry@v1
+
+      - name: Install package
+        run: poetry install
+
+      - name: Test with pytest
+        run: poetry run pytest tests/ --cov=urbanity --cov-report=xml
+
+      - name: Use Codecov to track coverage
+        uses: codecov/codecov-action@v2
+        with:
+          files: ./coverage.xml   # coverage report
+
+      - name: Build documentation
+        run: poetry run make html --directory docs/
+
+  cd:
+    # Only run this job if the "ci" job passes
+    needs: ci
+
+    # Only run this job if new work is pushed to "main"
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    # Set up operating system
+    runs-on: ubuntu-latest
+
+    # Define job steps
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.9"
+
+      - name: Check-out repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Install poetry
+        uses: snok/install-poetry@v1
+
+      - name: Install package
+        run: poetry install
+
+      - name: Use Python Semantic Release to prepare release
+        env:
+          # This token is created automatically by GH Actions
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+            git config user.name github-actions
+            git config user.email github-actions@github.com
+            poetry run semantic-release publish
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+          repository_url: https://test.pypi.org/legacy/
+
+      - name: Test install from TestPyPI
+        run: |
+            pip install \
+            --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple \
+            urbanity
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}

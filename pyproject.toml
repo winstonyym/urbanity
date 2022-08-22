@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "urbanity"
+version = "0.1.0"
+description = "Urbanity is a e to model and understand urban complexity."
+authors = ["winstonyym"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+
+[tool.poetry.dev-dependencies]
+[tool.semantic_release]
+version_variable = "pyproject.toml:version" # version location
+branch = "main"                             # branch to make releases of
+changelog_file = "CHANGELOG.md"             # changelog file
+build_command = "poetry build"              # build dists
+dist_path = "dist/"                         # where to put dists
+upload_to_release = true                    # auto-create GitHub release
+upload_to_pypi = false                      # don't auto-upload to PyPI
+remove_dist = false                         # don't remove dists
+patch_without_tag = true                    # patch release by default
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
