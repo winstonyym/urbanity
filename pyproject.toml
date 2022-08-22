@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "urbanity"
 version = "0.1.0"
-description = "Urbanity is a e to model and understand urban complexity."
+description = "Urbanity is a python package to model and understand urban complexity."
 authors = ["winstonyym"]
 license = "MIT"
 readme = "README.md"
@@ -15,6 +15,9 @@ pytest = "^7.1.2"
 pytest-cov = "^3.0.0"
 jupyter = "^1.0.0"
 python-semantic-release = "^7.31.2"
+myst-nb = {version = "^0.16.0", python = "^3.9"}
+sphinx-autoapi = "^1.9.0"
+sphinx-rtd-theme = "^1.0.0"
 [tool.semantic_release]
 version_variable = "pyproject.toml:version" # version location
 branch = "main"                             # branch to make releases of
