@@ -141,5 +141,5 @@ dmypy.json
 .DS_Store
 
 # Data and Notebooks
-.data
-.examples
+data/
+examples/
