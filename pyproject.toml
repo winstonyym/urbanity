@@ -9,6 +9,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"
 matplotlib = "^3.5.3"
+ipyleaflet = "^0.17.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^7.1.2"
