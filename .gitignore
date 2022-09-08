@@ -143,4 +143,3 @@ dmypy.json
 # Data and Notebooks
 data/
 examples/
-dist/
