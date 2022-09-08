@@ -9,7 +9,7 @@ from ipyleaflet import DrawControl
 
 def get_country_centroids(filepath: Optional[str] = None):
     if filepath is None:
-        data_path = os.path.join(os.getcwd(), "data/country.json")
+        data_path = os.path.join(os.getcwd(), "data_boundary/country.json")
     with open(data_path) as f:
         country_dict = json.load(f)
 
