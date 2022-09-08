@@ -1,3 +1,4 @@
 import urbanity as urb
 
-pass
+def test_import():
+    assert urb.__version__ ==  "0.1.1", "Package correctly imported."
