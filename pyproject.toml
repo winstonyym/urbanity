@@ -1,15 +1,17 @@
 [tool.poetry]
 name = "urbanity"
-version = "0.1.1"
+version = "0.2.0"
 description = "Urbanity is a python package to model and understand urban complexity."
 authors = ["winstonyym"]
 license = "MIT"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.9,<4.0"
+python = ">=3.8,<4.0"
 matplotlib = "^3.5.3"
 ipyleaflet = "^0.17.0"
+keplergl = "^0.3.2"
+pyrosm = "^0.6.1"
 
 [tool.poetry.dev-dependencies]
 pytest = "^7.1.2"
@@ -19,6 +21,7 @@ python-semantic-release = "^7.31.2"
 myst-nb = {version = "^0.16.0", python = "^3.9"}
 sphinx-autoapi = "^1.9.0"
 sphinx-rtd-theme = "^1.0.0"
+nodejs = "^0.1.1"
 [tool.semantic_release]
 version_variable = "pyproject.toml:version" # version location
 branch = "main"                             # branch to make releases of
