@@ -12,6 +12,7 @@ matplotlib = "^3.5.3"
 ipyleaflet = "^0.17.0"
 keplergl = "^0.3.2"
 pyrosm = "^0.6.1"
+networkx = "^2.8.6"
 
 [tool.poetry.dev-dependencies]
 pytest = "^7.1.2"

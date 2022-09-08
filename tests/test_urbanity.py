@@ -1,4 +1,3 @@
-from urbanity import urbanity
+import urbanity as urb
 
-def test_printsomething():
-    assert urbanity.printsomething() == 'This package has been created successfully.' 
+pass
