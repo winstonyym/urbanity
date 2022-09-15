@@ -143,3 +143,4 @@ dmypy.json
 # Data and Notebooks
 data/
 examples/
+secrets/
