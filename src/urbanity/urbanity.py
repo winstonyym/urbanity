@@ -2,6 +2,7 @@
 import os
 import json
 import time
+import math
 from typing import Optional, Union
 from webbrowser import get
 
@@ -10,6 +11,7 @@ from .geom import *
 
 import networkx as nx
 from networkx import MultiDiGraph
+import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Polygon
 import ipyleaflet
@@ -143,26 +145,51 @@ class Map(ipyleaflet.Map):
 
     def get_street_network(
             self, 
-            city: Optional[str] = None,
-            layer_name: Optional[str] = 'Street Network', 
-            polyline_style: Optional[dict] = {'style': {'color': 'black', 'opacity':0.5, 'weight':1.9},
+            directory: str,
+            bandwidth: int = 200,
+            network_type: str = 'driving',
+            building_attr: bool = True,
+            layer_name: str = 'Street Network', 
+            polyline_style: dict = {'style': {'color': 'black', 'opacity':0.5, 'weight':1.9},
                                 'hover_style': {'color': 'yellow' , 'opacity': 0.2}},  
-            show: Optional[bool] = False, 
-            dual: Optional[bool] = False,
-            network_type: str = 'driving') -> MultiDiGraph:
+            show: bool = False, 
+            dual: bool = False,
+            city: Optional[str] = None) -> MultiDiGraph:
+        """Function to generate either primal planar or dual (edge) networks. Bandwidth allows to account for
+        outside the network that share immediate neighbours with nodes within target area. *_attr arguments
+        can be toggled on or off to allow computation of additional geographic information into networks.
+
+        Args:
+            directory (str): Location to store and download Geofabrik file. Download will be skipped if location file is found.
+            bandwidth (int, optional): Distance to extract information beyond network. Defaults to 200.
+            network_type (str, optional): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
+            building_attr (bool, optional): Specifies whether building morphology attributes should be included. Defaults to True.
+            layer_name (str, optional): Layer name to display in ipyleafet. Defaults to 'Street Network'.
+            polyline_style (dict, optional): Style dictionary for plotting vector layers in ipyleaflet. Defaults to {'style': {'color': 'black', 'opacity':0.5, 'weight':1.9}, 'hover_style': {'color': 'yellow' , 'opacity': 0.2}}.
+            show (bool, optional): Specifies whether a new map view should be created at line location. Defaults to False.
+            dual (bool, optional): If true, creates a dual (edge) network graph. Defaults to False.
+            city (Optional[str], optional): Allows specification of particular city to obtain OpenStreetMap data. Defaults to None.
+
+        Raises:
+            Exception: No bounding box or polygon found to construct network.
+
+        Returns:
+            MultiDiGraph: A networkx/osmnx primal planar or dual (edge) network with specified attribute information.
+        """            
+
         start = time.time()
         print('Creating data folder and downloading osm street data...')
         try:
-            fp = get_data(self.country, directory = './data')
+            fp = get_data(self.country, directory = directory)
         except ValueError:
-            fp = get_data(city, directory='./data')
+            fp = get_data(city, directory = directory)
 
         print('Data extracted successfully. Proceeding to construct street network.')
 
         # Project and buffer original polygon to examine nodes outside boundary
         try:
             original_bbox = self.polygon_bounds.geometry.values[0]
-            buffered_tp = buffer_polygon(self.polygon_bounds, bandwidth=50)
+            buffered_tp = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
             buffered_bbox = buffered_tp.geometry.values[0]
         # catch when it hasn't even been defined 
         except (AttributeError, NameError):
@@ -171,6 +198,14 @@ class Map(ipyleaflet.Map):
         # Obtain nodes and edges within buffered polygon
         osm = pyrosm.OSM(fp, bounding_box=buffered_bbox)
         nodes, edges = osm.get_network(network_type=network_type, nodes=True)
+
+        if building_attr:
+            # Get building spatial data and project 
+            building = osm.get_buildings()
+            building_proj = project_gdf(building)
+
+            # Make geometry type homogeneous (polygons) to to allow overlay operation
+            building_polygon = fill_and_expand(building_proj)
 
         # Build networkx graph for pre-processing
         G_buff = osm.to_graph(nodes, edges, graph_type="networkx", force_bidirectional=True, retain_all=True)
@@ -203,23 +238,52 @@ class Map(ipyleaflet.Map):
         max_wcc = max(nx.weakly_connected_components(G_buff_trunc), key=len)
         G_buff_trunc = nx.subgraph(G_buff_trunc, max_wcc)
         nodes, edges = graph_to_gdf(G_buff_trunc, nodes=True, edges=True)
+        nodes = nodes.fillna('')
 
         # If not dual representation graph
         if dual == False:
-        #     street_data = GeoData(geo_dataframe = edges,
-        #             style=polyline_style['style'],
-        #             hover_style=polyline_style['hover_style'],
-        #             name = layer_name)
 
-        #     self.add_layer(street_data)
+            if building_attr:
+                building_nodes = project_gdf(nodes)
+                building_nodes['center_bound'] = building_nodes.geometry.buffer(bandwidth)
+                building_nodes = building_nodes.set_geometry('center_bound')
 
-        #     if show:
-        #         display(self)
-        
+
+                # Compute and add building attributes
+                res_intersection = building_nodes.overlay(building_polygon, how='intersection')
+                res_intersection['area'] = res_intersection.geometry.area
+                area_series = res_intersection.groupby(['osmid'])['area'].sum()
+                
+                # Obtain proportion 
+                total_area = math.pi*bandwidth**2
+                area_series = area_series / total_area
+                area_series.name = 'Footprint area'
+
+                
+                nodes = nodes.join(area_series)
+
+                # Add perimeter
+                res_intersection['perimeter'] = res_intersection.geometry.length
+                perimeter_series = res_intersection.groupby(['osmid'])['perimeter'].sum()
+
+                perimeter_series.name = 'Perimeter'
+                nodes = nodes.join(perimeter_series)
+
+
+                 # Add counts
+                counts_series = res_intersection['osmid'].value_counts()
+                counts_series.name = 'Counts'
+                nodes = nodes.join(counts_series)
+                
+                nodes['Footprint area'] = nodes['Footprint area'].replace(np.nan, 0).astype(float)
+                nodes['Perimeter'] = nodes['Perimeter'].replace(np.nan, 0).astype(float)
+                nodes['Counts'] = nodes['Counts'].replace(np.nan, 0).astype(int)
+
             print("--- %s seconds ---" % round(time.time() - start,3))
 
             return G_buff_trunc, nodes, edges
-        
+
+            
         elif dual: 
             # First extract dictionary of osmids and lengths for original nodes associated with each edge
             osmid_view = nx.get_edge_attributes(G_buff_trunc, "osmid")
@@ -252,16 +316,47 @@ class Map(ipyleaflet.Map):
 
             # Extract nodes and edges GeoDataFrames from graph
             L_nodes, L_edges = graph_to_gdf(L, nodes=True, edges=True, dual=True)
+            L_nodes = L_nodes.fillna('')
 
-            # street_edge_data = GeoData(geo_dataframe = L_edges,
-            #         style=polyline_style['style'],
-            #         hover_style=polyline_style['hover_style'],
-            #         name = layer_name + ' (Edges)')
+            if building_attr:
+                building_nodes = project_gdf(L_nodes)
+                building_nodes['center_bound'] = building_nodes.geometry.buffer(bandwidth)
+                building_nodes = building_nodes.set_geometry('center_bound')
+                building_nodes = building_nodes.reset_index()
+                building_nodes = building_nodes.rename(columns = {'level_0':'from', 'level_1':'to'})
+                building_nodes['unique'] = building_nodes.index
 
-            # self.add_layer(street_edge_data)
+                # Compute and add area
+                res_intersection = building_nodes.overlay(building_polygon, how='intersection')
+                res_intersection['area'] = res_intersection.geometry.area
+                area_series = res_intersection.groupby(['unique'])['area'].sum()
+                
+                # Obtain proportion 
+                total_area = math.pi*bandwidth**2
+                area_series = area_series / total_area
+                area_series = area_series.astype(float)
+                area_series.name = 'Footprint area'
 
-            # if show:
-            #     display(self)
+                L_nodes['unique'] = list(range(len(L_nodes)))
+                L_nodes = L_nodes.join(area_series, on = 'unique')
+
+                # Add perimeter
+                res_intersection['perimeter'] = res_intersection.geometry.length
+                perimeter_series = res_intersection.groupby(['unique'])['perimeter'].sum()
+
+                perimeter_series.name = 'Perimeter'
+                L_nodes = L_nodes.join(perimeter_series, on = 'unique')
+
+
+                 # Add counts
+                counts_series = res_intersection['unique'].value_counts()
+                counts_series.name = 'Counts'
+                L_nodes = L_nodes.join(counts_series, on = 'unique')
+                
+                L_nodes['Footprint area'] = L_nodes['Footprint area'].replace(np.nan, 0).astype(float)
+                L_nodes['Perimeter'] = L_nodes['Perimeter'].replace(np.nan, 0).astype(float)
+                L_nodes['Counts'] = L_nodes['Counts'].replace(np.nan, 0).astype(int)
+    
 
             print("--- %s seconds ---" % round(time.time() - start,3))
 
@@ -280,6 +375,7 @@ class Map(ipyleaflet.Map):
 
     def get_building_network(
             self, 
+            directory: str,
             layer_name: Optional[str] = 'Building Network', 
             polyline_style: Optional[dict] = {'style': {'color': 'black', 'opacity':0.5, 'weight':1.9},
                                 'hover_style': {'color': 'yellow' , 'opacity': 0.2}},  
@@ -287,13 +383,13 @@ class Map(ipyleaflet.Map):
             network_type: str = 'driving') -> MultiDiGraph:
         start = time.time()
         print('Creating data folder and downloading osm building data...')
-        fp = get_data(self.country, directory = './data')
+        fp = get_data(self.country, directory = directory)
         print('Data extracted successfully. Proceeding to construct building network.')
 
         # Project and buffer original polygon to examine nodes outside boundary
         try:
             original_bbox = self.polygon_bounds.geometry.values[0]
-            buffered_tp = buffer_polygon(self.polygon_bounds, bandwidth=50)
+            buffered_tp = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
             buffered_bbox = buffered_tp.geometry.values[0]
         # catch when it hasn't even been defined 
         except (AttributeError, NameError):
@@ -354,7 +450,7 @@ class Map(ipyleaflet.Map):
         B_max = nx.subgraph(B, max_wcc)
 
         B_nodes, B_edges = graph_to_gdf(B_max, nodes=True, edges=True, dual=True)
-
+        B_nodes = B_nodes.fillna('')
         # Return graph and add network layer to Map object
 
         # building_data = GeoData(geo_dataframe = B_edges,

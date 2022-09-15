@@ -19,4 +19,6 @@ def get_available_countries():
     country_dict = set(get_country_centroids())
     print(sorted(country_dict))
 
+def gdf_to_tensor():
+    pass
 

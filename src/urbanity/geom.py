@@ -1,7 +1,7 @@
 # Geometric helper functions
 from shapely.ops import split
 from functools import partial
-from shapely.geometry import Point, LineString, MultiPolygon
+from shapely.geometry import Point, Polygon, LineString, MultiPolygon
 import networkx as nx
 import geopandas as gpd
 import numpy as np
@@ -19,7 +19,7 @@ def project_gdf(gdf):
     
     return gdf_proj
 
-def buffer_polygon(gdf, bandwidth = 50):
+def buffer_polygon(gdf, bandwidth = 200):
     buffer_zone = project_gdf(gdf).buffer(bandwidth)
     buffered_gdf = buffer_zone.to_crs(4326)
     return buffered_gdf
@@ -431,3 +431,48 @@ def graph_to_gdf(G, nodes=False, edges=False, dual=False):
     elif edges:
         return gdf_edges
 
+def fill_and_expand(gdf):
+    """Function to expand multilinestring and multipolygons into Polygon,
+     to allow for overlay operation when computing building attributes.
+
+    Args:
+        gdf (geopandas.geodataframe.GeoDataFrame): Dataframe consisting of network nodes.
+
+    Returns:
+        geopandas.geodataframe.GeoDataFrame: Modified dataframe with homogenous geometry type. 
+    """    
+
+    for i, geom in enumerate(gdf.geometry):
+
+        if geom.geom_type == 'LineString':
+            gdf = gdf.drop(i, axis=0)
+
+        elif geom.geom_type=='MultiLineString':
+            linestring = gdf[gdf.index == i]
+            linestring_exploded = linestring.explode(index_parts=True)
+
+            # Find bounding polygon
+            poly_len = len(linestring_exploded)
+            list_of_minx = list(linestring_exploded.bounds.minx)
+            min_ind = list_of_minx.index(min(list_of_minx))
+            
+            # Create list of hole polygons
+            holes = []
+            for k, geom in enumerate(linestring_exploded.geometry):
+                if (k != min_ind) and (geom.geom_type!='LineString'):
+                    holes.append(list(geom.coords))
+
+            try:
+                polygon_geom = Polygon(list(list(linestring_exploded.geometry.iloc[min_ind].coords)), 
+                                  holes = holes)
+                polygon = gpd.GeoDataFrame(index=[0], crs=linestring.crs, geometry=[polygon_geom]) 
+                gdf = gdf.drop(i, axis=0)
+                gdf = gpd.GeoDataFrame(pd.concat([gpd, polygon], ignore_index=True), crs=gpd.crs) 
+
+            except ValueError:
+                gdf = gdf.drop(i, axis=0)          
+
+    # Expand MultiPolygons
+    gdf = gdf.explode(index_parts=True)
+    
+    return gdf
