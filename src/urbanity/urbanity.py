@@ -95,7 +95,7 @@ class Map(ipyleaflet.Map):
                 lat_list.append(lat)
         
             polygon_geom = Polygon(zip(lon_list, lat_list))
-            gdf = gpd.GeoDataFrame(index=[0], crs='epsg:4326', geometry=[polygon_geom]) 
+            gdf = gpd.GeoDataFrame(index=[0], geometry=[polygon_geom]) 
 
             # Assign bounding box as self object attribute
             self.polygon_bounds = gdf
