@@ -371,21 +371,22 @@ class Map(ipyleaflet.Map):
                 nodes = nodes.rename(columns = {'commercial':'Commercial', 'entertainment':'Entertainment','food':'Food','healthcare':'Healthcare','civic':'Civic', 'institutional':'Institutional'})
 
             if svi_attr:
-                svi_path = pkg_resources.resource_filename('urbanity', f"svi_data/{location}.geojson")
-                svi_data = gpd.read_file(svi_path)
+                pass
+                # svi_path = pkg_resources.resource_filename('urbanity', f"svi_data/{location}.geojson")
+                # svi_data = gpd.read_file(svi_path)
 
-                # returns gdf of image id, tile_id, indicators, and point coords
-                res_intersection = svi_data.overlay(nodes_buffer, how='intersection')
+                # # returns gdf of image id, tile_id, indicators, and point coords
+                # res_intersection = svi_data.overlay(nodes_buffer, how='intersection')
                 
-                indicators = ['Green View', 'Sky View', 'Building View', 'Road View']
-                for indicator in indicators:
+                # indicators = ['Green View', 'Sky View', 'Building View', 'Road View']
+                # for indicator in indicators:
                     
-                    svi_series = res_intersection.groupby(['osmid'])[indicator].mean()
-                    svi_series.name = indicator
-                    nodes = nodes.join(svi_series)
+                #     svi_series = res_intersection.groupby(['osmid'])[indicator].mean()
+                #     svi_series.name = indicator
+                #     nodes = nodes.join(svi_series)
 
-                    index_mean = nodes[indicator].mean()
-                    nodes[indicator] = nodes[indicator].replace(np.nan, index_mean)
+                #     index_mean = nodes[indicator].mean()
+                #     nodes[indicator] = nodes[indicator].replace(np.nan, index_mean)
             
             print("--- %s seconds ---" % round(time.time() - start,3))
             return G_buff_trunc, nodes, edges
