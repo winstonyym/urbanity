@@ -4,6 +4,7 @@ from functools import partial
 from shapely.geometry import Point, Polygon, LineString, MultiPolygon
 import networkx as nx
 import geopandas as gpd
+import pandas as pd
 import numpy as np
 
 def project_gdf(gdf):
@@ -467,7 +468,7 @@ def fill_and_expand(gdf):
                                   holes = holes)
                 polygon = gpd.GeoDataFrame(index=[0], crs=linestring.crs, geometry=[polygon_geom]) 
                 gdf = gdf.drop(i, axis=0)
-                gdf = gpd.GeoDataFrame(pd.concat([gpd, polygon], ignore_index=True), crs=gpd.crs) 
+                gdf = gpd.GeoDataFrame(pd.concat([gdf, polygon], ignore_index=True), crs=gdf.crs) 
 
             except ValueError:
                 gdf = gdf.drop(i, axis=0)          

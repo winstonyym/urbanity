@@ -198,7 +198,7 @@ class Map(ipyleaflet.Map):
         except KeyError:
             fp = get_data(self.country, directory = directory)
             print(f"KeyError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
-        finally:
+        except KeyError:
             raise ValueError('No osm data found for specified location.')
 
         print('Data extracted successfully. Proceeding to construct street network.')
