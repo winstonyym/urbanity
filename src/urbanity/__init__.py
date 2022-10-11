@@ -5,4 +5,3 @@ __version__ = version("urbanity")
 from .urbanity import *
 from .utils import *
 from .geom import *
-from .svi import *

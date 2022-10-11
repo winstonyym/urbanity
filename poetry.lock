@@ -66,6 +66,7 @@ python-versions = ">=3.7.2"
 
 [package.dependencies]
 lazy-object-proxy = ">=1.4.0"
+typing-extensions = {version = ">=3.10", markers = "python_version < \"3.10\""}
 wrapt = [
     {version = ">=1.11,<2", markers = "python_version < \"3.11\""},
     {version = ">=1.14,<2", markers = "python_version >= \"3.11\""},
@@ -183,7 +184,7 @@ pycparser = "*"
 name = "charset-normalizer"
 version = "2.1.1"
 description = "The Real First Universal Charset Detector. Open, modern and actively maintained alternative to Chardet."
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.6.0"
 
@@ -867,6 +868,7 @@ python-versions = ">=3.7"
 beautifulsoup4 = "*"
 bleach = "*"
 defusedxml = "*"
+importlib-metadata = {version = ">=3.6", markers = "python_version < \"3.10\""}
 jinja2 = ">=3.0"
 jupyter-core = ">=4.7"
 jupyterlab-pygments = "*"
@@ -987,7 +989,10 @@ optional = false
 python-versions = ">=3.8"
 
 [package.dependencies]
-numpy = {version = ">=1.21.0", markers = "python_version >= \"3.10\""}
+numpy = [
+    {version = ">=1.21.0", markers = "python_version >= \"3.10\""},
+    {version = ">=1.20.3", markers = "python_version < \"3.10\""},
+]
 python-dateutil = ">=2.8.1"
 pytz = ">=2020.1"
 
@@ -1373,6 +1378,23 @@ docs = ["sphinx-rtd-theme", "sphinx", "numpydoc", "ghp-import"]
 all = ["shapely", "pytest (>=2.8.2)", "sphinx-rtd-theme", "pytest-cov (>=2.2.0)", "ipython (>=2.0)", "hypothesis", "boto3 (>=1.2.4)", "numpydoc", "sphinx", "ghp-import", "matplotlib", "packaging"]
 
 [[package]]
+name = "rasterstats"
+version = "0.17.0"
+description = "Summarize geospatial raster datasets based on vector geometries"
+category = "main"
+optional = false
+python-versions = "*"
+
+[package.dependencies]
+affine = "<3.0"
+cligj = ">=0.4"
+fiona = "*"
+numpy = ">=1.9"
+rasterio = ">=1.0"
+shapely = "*"
+simplejson = "*"
+
+[[package]]
 name = "requests"
 version = "2.28.1"
 description = "Python HTTP for Humans."
@@ -1415,6 +1437,14 @@ python-versions = ">=3.6"
 all = ["pytest", "pytest-cov", "numpy"]
 test = ["pytest", "pytest-cov"]
 vectorized = ["numpy"]
+
+[[package]]
+name = "simplejson"
+version = "3.17.6"
+description = "Simple, fast, extensible JSON encoder/decoder for Python"
+category = "main"
+optional = false
+python-versions = ">=2.5, !=3.0.*, !=3.1.*, !=3.2.*"
 
 [[package]]
 name = "six"
@@ -1469,6 +1499,7 @@ babel = ">=2.9"
 colorama = {version = ">=0.4.5", markers = "sys_platform == \"win32\""}
 docutils = ">=0.14,<0.20"
 imagesize = ">=1.3"
+importlib-metadata = {version = ">=4.8", markers = "python_version < \"3.10\""}
 Jinja2 = ">=3.0"
 packaging = ">=21.0"
 Pygments = ">=2.12"
@@ -1743,7 +1774,7 @@ python-versions = ">=3.5"
 name = "urllib3"
 version = "1.26.12"
 description = "HTTP library with thread-safe connection pooling, file post, and more."
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, !=3.5.*, <4"
 
@@ -1817,8 +1848,8 @@ testing = ["pytest (>=6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "flake8 
 
 [metadata]
 lock-version = "1.1"
-python-versions = "^3.10"
-content-hash = "08034b2bd070ecbed4d06cd866fef2b0923e413ebbcf7f1347e4ff10f30bbe41"
+python-versions = "^3.9"
+content-hash = "5d34d376bcbcb4d9ea5f994bb49c65f6294ead5eed776c78b0b29b135c74dfe9"
 
 [metadata.files]
 affine = []
@@ -2279,6 +2310,7 @@ pyzmq = []
 qtconsole = []
 qtpy = []
 rasterio = []
+rasterstats = []
 requests = [
     {file = "requests-2.28.1-py3-none-any.whl", hash = "sha256:8fefa2a1a1365bf5520aac41836fbee479da67864514bdb821f31ce07ce65349"},
     {file = "requests-2.28.1.tar.gz", hash = "sha256:7c5599b102feddaa661c826c56ab4fee28bfd17f5abca1ebbe3e7f19d7c97983"},
@@ -2288,6 +2320,7 @@ send2trash = [
     {file = "Send2Trash-1.8.0.tar.gz", hash = "sha256:d2c24762fd3759860a0aff155e45871447ea58d2be6bdd39b5c8f966a0c99c2d"},
 ]
 shapely = []
+simplejson = []
 six = [
     {file = "six-1.16.0-py2.py3-none-any.whl", hash = "sha256:8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254"},
     {file = "six-1.16.0.tar.gz", hash = "sha256:1e61c37477a1626458e36f7b1d82aa5c9b094fa4802892072e49de9c60c4c926"},
