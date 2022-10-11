@@ -574,10 +574,5 @@ class Map(ipyleaflet.Map):
 
         return B_max, B_nodes, B_edges
 
-class StreetNetwork(MultiDiGraph):
-    def __init__(self, ):
-        pass
-
-
 
     
