@@ -3,11 +3,14 @@ import os
 import json
 import time
 import math
+from unittest import skip
+import pkg_resources
 from typing import Optional, Union
 from webbrowser import get
 
-from .utils import get_country_centroids
+from .utils import get_country_centroids, finetune_poi
 from .geom import *
+from .population import get_population_data
 
 import networkx as nx
 from networkx import MultiDiGraph
@@ -18,6 +21,9 @@ import ipyleaflet
 from ipyleaflet import basemaps, basemap_to_tiles, Icon, Marker, LayersControl, LayerGroup, DrawControl, FullScreenControl, ScaleControl, LocalTileLayer, GeoData
 import pyrosm
 from pyrosm import get_data
+import rasterstats
+
+
 
 # Import country coords
 country_dict = get_country_centroids()
@@ -99,6 +105,7 @@ class Map(ipyleaflet.Map):
 
             # Assign bounding box as self object attribute
             self.polygon_bounds = gdf
+            self.polygon_bounds.crs = 'epsg:4326'
 
             # Remove drawing on self and close display
             if remove == True: 
@@ -146,30 +153,37 @@ class Map(ipyleaflet.Map):
     def get_street_network(
             self, 
             directory: str,
+            location: str,
             bandwidth: int = 200,
             network_type: str = 'driving',
             building_attr: bool = True,
+            pop_attr: bool = True,
+            poi_attr: bool = True,
+            svi_attr: bool = False,
+            use_tif: bool = False,
             layer_name: str = 'Street Network', 
             polyline_style: dict = {'style': {'color': 'black', 'opacity':0.5, 'weight':1.9},
                                 'hover_style': {'color': 'yellow' , 'opacity': 0.2}},  
             show: bool = False, 
-            dual: bool = False,
-            city: Optional[str] = None) -> MultiDiGraph:
+            dual: bool = False) -> MultiDiGraph:
         """Function to generate either primal planar or dual (edge) networks. Bandwidth allows to account for
         outside the network that share immediate neighbours with nodes within target area. *_attr arguments
         can be toggled on or off to allow computation of additional geographic information into networks.
 
         Args:
             directory (str): Location to store and download Geofabrik file. Download will be skipped if location file is found.
-            bandwidth (int, optional): Distance to extract information beyond network. Defaults to 200.
-            network_type (str, optional): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
-            building_attr (bool, optional): Specifies whether building morphology attributes should be included. Defaults to True.
-            layer_name (str, optional): Layer name to display in ipyleafet. Defaults to 'Street Network'.
-            polyline_style (dict, optional): Style dictionary for plotting vector layers in ipyleaflet. Defaults to {'style': {'color': 'black', 'opacity':0.5, 'weight':1.9}, 'hover_style': {'color': 'yellow' , 'opacity': 0.2}}.
-            show (bool, optional): Specifies whether a new map view should be created at line location. Defaults to False.
-            dual (bool, optional): If true, creates a dual (edge) network graph. Defaults to False.
-            city (Optional[str], optional): Allows specification of particular city to obtain OpenStreetMap data. Defaults to None.
-
+            location (str): Accepts city name or country name to obtain OpenStreetMap data.
+            bandwidth (int): Distance to extract information beyond network. Defaults to 200.
+            network_type (str): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
+            building_attr (bool): Specifies whether building morphology attributes should be included. Defaults to True.
+            pop_attr (bool): Specifies whether population attributes should be included. Defaults to True.
+            poi_attr (bool): Specifies whether points of interest attributes should be included. Defaults to True.
+            use_tif (bool): Specifies whether csv or tif should be used to construct population attributes. Defaults to False.
+            layer_name (str): Layer name to display in ipyleafet. Defaults to 'Street Network'.
+            polyline_style (dict): Style dictionary for plotting vector layers in ipyleaflet. Defaults to {'style': {'color': 'black', 'opacity':0.5, 'weight':1.9}, 'hover_style': {'color': 'yellow' , 'opacity': 0.2}}.
+            show (bool): Specifies whether a new map view should be created at line location. Defaults to False.
+            dual (bool): If true, creates a dual (edge) network graph. Defaults to False.
+            
         Raises:
             Exception: No bounding box or polygon found to construct network.
 
@@ -178,11 +192,14 @@ class Map(ipyleaflet.Map):
         """            
 
         start = time.time()
-        print('Creating data folder and downloading osm street data...')
         try:
+            fp = get_data(location, directory = directory)
+            print('Creating data folder and downloading osm street data...')
+        except KeyError:
             fp = get_data(self.country, directory = directory)
-        except ValueError:
-            fp = get_data(city, directory = directory)
+            print(f"KeyError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+        finally:
+            raise ValueError('No osm data found for specified location.')
 
         print('Data extracted successfully. Proceeding to construct street network.')
 
@@ -242,15 +259,15 @@ class Map(ipyleaflet.Map):
 
         # If not dual representation graph
         if dual == False:
+            
+            nodes_buffer = project_gdf(nodes)
+            nodes_buffer['center_bound'] = nodes_buffer.geometry.buffer(bandwidth)
+            nodes_buffer = nodes_buffer.set_geometry('center_bound')
 
             if building_attr:
-                building_nodes = project_gdf(nodes)
-                building_nodes['center_bound'] = building_nodes.geometry.buffer(bandwidth)
-                building_nodes = building_nodes.set_geometry('center_bound')
-
 
                 # Compute and add building attributes
-                res_intersection = building_nodes.overlay(building_polygon, how='intersection')
+                res_intersection = nodes_buffer.overlay(building_polygon, how='intersection')
                 res_intersection['area'] = res_intersection.geometry.area
                 area_series = res_intersection.groupby(['osmid'])['area'].sum()
                 
@@ -278,12 +295,101 @@ class Map(ipyleaflet.Map):
                 nodes['Footprint area'] = nodes['Footprint area'].replace(np.nan, 0).astype(float)
                 nodes['Perimeter'] = nodes['Perimeter'].replace(np.nan, 0).astype(float)
                 nodes['Counts'] = nodes['Counts'].replace(np.nan, 0).astype(int)
+            
+            if pop_attr:
 
+                groups = ['PopSum', 'Men', 'Women', 'Elderly','Youth','Children']
+
+                if not use_tif:
+                    pop_list, target_cols = get_population_data(self.country, use_tif=use_tif)
+                    for i, data in enumerate(zip(pop_list, target_cols)):
+                        proj_data = project_gdf(data[0])
+                        res_intersection = proj_data.overlay(nodes_buffer, how='intersection')
+
+                        # Add population sum
+                        pop_sum_series = res_intersection.groupby(['osmid'])[data[1]].sum()
+                        pop_sum_series.name = groups[i]
+                        nodes = nodes.join(pop_sum_series)
+
+                    for name in groups:
+                        nodes[name] = nodes[name].replace(np.nan, 0).astype(float)
+                    
+                if use_tif: 
+                    # Using .tif for computation
+                    src_list, rc_list = get_population_data(self.country, use_tif=use_tif)
+                    nodes_buffer = nodes_buffer.to_crs('epsg:4326')
+                    
+                    for group, src, rc in zip(groups, src_list, rc_list):
+                        stats = ['sum']
+
+                        result = rasterstats.zonal_stats(
+                            nodes_buffer, 
+                            rc[0], 
+                            nodata = 0, 
+                            affine = src.transform, 
+                            stats = stats
+                        )
+
+                        result = pd.DataFrame(result)
+
+                        # Add population sum
+                        nodes[group] = list(result['sum'])
+                        nodes[group] = nodes[group].replace(np.nan, 0).astype(int)
+                
+            if poi_attr:
+                poi_path = pkg_resources.resource_filename('urbanity', "map_data/poi_filter.json")
+                with open(poi_path) as poi_filter:
+                    poi_filter = json.load(poi_filter)
+                
+                pois = osm.get_pois(custom_filter = poi_filter['custom_filter'])
+                pois = pois.replace(np.nan, '')
+
+                def poi_col(amenity, shop, tourism, leisure):
+                    value = amenity
+                    if amenity == '' and shop not in poi_filter['food_set']:
+                        value = 'commercial'
+                    elif amenity == '' and shop in poi_filter['food_set']:
+                        value = shop
+                    elif amenity == '' and tourism != '':
+                        value = 'entertainment'
+                    elif amenity == '' and leisure != '':
+                        value = 'recreational'
+                    return value
+                
+                pois['poi_col'] = pois.apply(lambda row: poi_col(row['amenity'], row['shop'], row['tourism'], row['leisure']), axis=1)
+                pois = pois[['id', 'osm_type','lon','lat','name','poi_col','geometry']]
+
+                pois = finetune_poi(pois, 'poi_col', poi_filter['replace_dict'], n=30)
+                pois = project_gdf(pois)
+                pois['geometry'] = pois.geometry.centroid
+
+                res_intersection = pois.overlay(nodes_buffer, how='intersection')
+                poi_series = res_intersection.groupby(['osmid'])['poi_col'].value_counts()
+                pois_df = pd.DataFrame(index = poi_series.index, data = poi_series.values).reset_index()
+                pois_df = pd.pivot(pois_df, index='osmid', columns='poi_col', values=0)
+                nodes = nodes.merge(pois_df, how='left', left_index=True, right_index=True).replace(np.nan,0) 
+                nodes = nodes.rename(columns = {'commercial':'Commercial', 'entertainment':'Entertainment','food':'Food','healthcare':'Healthcare','civic':'Civic', 'institutional':'Institutional'})
+
+            if svi_attr:
+                svi_path = pkg_resources.resource_filename('urbanity', f"svi_data/{location}.geojson")
+                svi_data = gpd.read_file(svi_path)
+
+                # returns gdf of image id, tile_id, indicators, and point coords
+                res_intersection = svi_data.overlay(nodes_buffer, how='intersection')
+                
+                indicators = ['Green View', 'Sky View', 'Building View', 'Road View']
+                for indicator in indicators:
+                    
+                    svi_series = res_intersection.groupby(['osmid'])[indicator].mean()
+                    svi_series.name = indicator
+                    nodes = nodes.join(svi_series)
+
+                    index_mean = nodes[indicator].mean()
+                    nodes[indicator] = nodes[indicator].replace(np.nan, index_mean)
+            
             print("--- %s seconds ---" % round(time.time() - start,3))
-
             return G_buff_trunc, nodes, edges
 
-            
         elif dual: 
             # First extract dictionary of osmids and lengths for original nodes associated with each edge
             osmid_view = nx.get_edge_attributes(G_buff_trunc, "osmid")
