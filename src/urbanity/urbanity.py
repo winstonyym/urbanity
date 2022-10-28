@@ -1,8 +1,10 @@
 # main module
+from ipaddress import collapse_addresses
 import os
 import json
 import time
 import math
+import warnings
 from unittest import skip
 import pkg_resources
 from typing import Optional, Union
@@ -11,19 +13,24 @@ from webbrowser import get
 from .utils import get_country_centroids, finetune_poi
 from .geom import *
 from .population import get_population_data
+from .topology import compute_centrality, merge_nx_property, merge_nx_attr
 
+import numpy as np
 import networkx as nx
 from networkx import MultiDiGraph
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Polygon
+from shapely.errors import ShapelyDeprecationWarning
 import ipyleaflet
 from ipyleaflet import basemaps, basemap_to_tiles, Icon, Marker, LayersControl, LayerGroup, DrawControl, FullScreenControl, ScaleControl, LocalTileLayer, GeoData
 import pyrosm
 from pyrosm import get_data
 import rasterstats
+import networkit
 
-
+# Catch known warnings
+warnings.filterwarnings("ignore", category=ShapelyDeprecationWarning) 
 
 # Import country coords
 country_dict = get_country_centroids()
@@ -32,6 +39,13 @@ class Map(ipyleaflet.Map):
     def __init__(self, country: Optional[str] = None, **kwargs):
         self.bbox = None
         self.polygon_bounds = None
+
+        if os.path.isdir('./data'):
+            self.directory = "./data"
+        else:
+            os.makedirs('./data')
+            self.directory = "./data"
+        
 
         super().__init__(**kwargs)
     
@@ -152,10 +166,10 @@ class Map(ipyleaflet.Map):
 
     def get_street_network(
             self, 
-            directory: str,
             location: str,
             bandwidth: int = 200,
             network_type: str = 'driving',
+            graph_attr: bool = True,
             building_attr: bool = True,
             pop_attr: bool = True,
             poi_attr: bool = True,
@@ -166,15 +180,16 @@ class Map(ipyleaflet.Map):
                                 'hover_style': {'color': 'yellow' , 'opacity': 0.2}},  
             show: bool = False, 
             dual: bool = False) -> MultiDiGraph:
-        """Function to generate either primal planar or dual (edge) networks. Bandwidth allows to account for
-        outside the network that share immediate neighbours with nodes within target area. *_attr arguments
-        can be toggled on or off to allow computation of additional geographic information into networks.
+        """Function to generate either primal planar or dual (edge) networks. If multiple geometries are provided, 
+        network is constructed for only the first entry. Please merge geometries before use.
+        Bandwidth allows to account for outside the network that share immediate neighbours with nodes 
+        within target area. *_attr arguments can be toggled on or off to allow computation of additional geographic information into networks.
 
         Args:
-            directory (str): Location to store and download Geofabrik file. Download will be skipped if location file is found.
             location (str): Accepts city name or country name to obtain OpenStreetMap data.
             bandwidth (int): Distance to extract information beyond network. Defaults to 200.
             network_type (str): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
+            graph_attr (bool): Specifies whether graph metric and topological attributes should be included. Defaults to True.
             building_attr (bool): Specifies whether building morphology attributes should be included. Defaults to True.
             pop_attr (bool): Specifies whether population attributes should be included. Defaults to True.
             poi_attr (bool): Specifies whether points of interest attributes should be included. Defaults to True.
@@ -193,10 +208,10 @@ class Map(ipyleaflet.Map):
 
         start = time.time()
         try:
-            fp = get_data(location, directory = directory)
+            fp = get_data(location, directory = self.directory)
             print('Creating data folder and downloading osm street data...')
         except KeyError:
-            fp = get_data(self.country, directory = directory)
+            fp = get_data(self.country, directory = self.directory)
             print(f"KeyError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
         except KeyError:
             raise ValueError('No osm data found for specified location.')
@@ -205,7 +220,7 @@ class Map(ipyleaflet.Map):
 
         # Project and buffer original polygon to examine nodes outside boundary
         try:
-            original_bbox = self.polygon_bounds.geometry.values[0]
+            original_bbox = self.polygon_bounds.geometry[0]
             buffered_tp = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
             buffered_bbox = buffered_tp.geometry.values[0]
         # catch when it hasn't even been defined 
@@ -254,15 +269,55 @@ class Map(ipyleaflet.Map):
         # Remove unconnected subgraphs
         max_wcc = max(nx.weakly_connected_components(G_buff_trunc), key=len)
         G_buff_trunc = nx.subgraph(G_buff_trunc, max_wcc)
-        nodes, edges = graph_to_gdf(G_buff_trunc, nodes=True, edges=True)
+
+        # Remove self loops
+        G_buff_trunc_loop = G_buff_trunc.copy()
+        G_buff_trunc_loop.remove_edges_from(nx.selfloop_edges(G_buff_trunc_loop))
+
+        nodes, edges = graph_to_gdf(G_buff_trunc_loop, nodes=True, edges=True)
         nodes = nodes.fillna('')
+
+
 
         # If not dual representation graph
         if dual == False:
             
             nodes_buffer = project_gdf(nodes)
-            nodes_buffer['center_bound'] = nodes_buffer.geometry.buffer(bandwidth)
-            nodes_buffer = nodes_buffer.set_geometry('center_bound')
+            nodes_buffer['geometry'] = nodes_buffer.geometry.buffer(bandwidth)
+            nodes_buffer = nodes_buffer.set_geometry('geometry')
+            nodes_buffer = nodes_buffer.drop(columns = ['osmid'])
+            nodes_buffer = nodes_buffer.reset_index()
+
+            if graph_attr:
+
+                # Compute graph attributes
+
+                # Add Node Density
+                proj_nodes = project_gdf(nodes)
+                res_intersection = proj_nodes.overlay(nodes_buffer, how='intersection')
+                res_intersection['Node Density'] = 1
+                nodes["Node Density"] = res_intersection.groupby(['osmid_2'])['Node Density'].sum()
+
+                # Add Street Length
+                proj_edges = project_gdf(edges)
+                proj_edges = proj_edges.drop(columns=['osmid'])
+                res_intersection = proj_edges.overlay(nodes_buffer, how='intersection')
+                res_intersection['street_len'] = res_intersection.geometry.length
+                nodes["Street Length"] = res_intersection.groupby(['osmid'])['street_len'].sum()
+
+
+                # Add Degree Centrality, Clustering (Weighted and Unweighted)
+                nodes = merge_nx_property(nodes, G_buff_trunc_loop.out_degree, 'Degree')
+                nodes = merge_nx_attr(G_buff_trunc_loop, nodes, nx.clustering, 'Clustering')
+                nodes = merge_nx_attr(G_buff_trunc_loop, nodes, nx.clustering, 'Clustering (Weighted)', weight='length')
+
+
+                #  Add Centrality Measures
+                nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.Closeness, 'Closeness Centrality', False, False)
+                nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.Betweenness, 'Betweenness Centrality', True)
+                nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.EigenvectorCentrality, 'Eigenvector Centrality')
+                nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.KatzCentrality, 'Katz Centrality')
+                nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.PageRank, 'PageRank', 0.85, 1e-8, networkit.centrality.SinkHandling.NoSinkHandling, True)
 
             if building_attr:
 
@@ -273,27 +328,47 @@ class Map(ipyleaflet.Map):
                 
                 # Obtain proportion 
                 total_area = math.pi*bandwidth**2
-                area_series = area_series / total_area
-                area_series.name = 'Footprint area'
+                nodes['Footprint Proportion'] = area_series / total_area
+            
+                # Obtain mean area
+                mean_series = res_intersection.groupby(['osmid'])['area'].mean()
+                nodes['Footprint Mean'] = mean_series
 
-                
-                nodes = nodes.join(area_series)
+                # Obtain mean area
+                std_series = res_intersection.groupby(['osmid'])['area'].std()
+                nodes['Footprint Stdev'] = std_series
 
                 # Add perimeter
                 res_intersection['perimeter'] = res_intersection.geometry.length
                 perimeter_series = res_intersection.groupby(['osmid'])['perimeter'].sum()
+                nodes['Perimeter Total'] = perimeter_series
 
-                perimeter_series.name = 'Perimeter'
-                nodes = nodes.join(perimeter_series)
+                perimeter_mean_series = res_intersection.groupby(['osmid'])['perimeter'].mean()
+                nodes['Perimeter Mean'] = perimeter_mean_series
 
+                perimeter_std_series = res_intersection.groupby(['osmid'])['perimeter'].std()
+                nodes['Perimeter Stdev'] = perimeter_std_series
+
+                # Add complexity Mean and Std.dev
+                res_intersection['complexity'] = res_intersection['perimeter'] / np.sqrt(np.sqrt(res_intersection['area']))   
+                compl_mean_series = res_intersection.groupby(['osmid'])['complexity'].mean()
+                nodes['Complexity Mean'] = compl_mean_series
+                
+                compl_std_series = res_intersection.groupby(['osmid'])['complexity'].std()
+                nodes['Complexity Stdev'] = compl_std_series
 
                  # Add counts
                 counts_series = res_intersection['osmid'].value_counts()
-                counts_series.name = 'Counts'
-                nodes = nodes.join(counts_series)
+                nodes['Counts'] = counts_series
                 
-                nodes['Footprint area'] = nodes['Footprint area'].replace(np.nan, 0).astype(float)
-                nodes['Perimeter'] = nodes['Perimeter'].replace(np.nan, 0).astype(float)
+                nodes['Footprint Proportion'] = nodes['Footprint Proportion'].replace(np.nan, 0).astype(float)
+                nodes['Footprint Mean'] = nodes['Footprint Mean'].replace(np.nan, 0).astype(float)
+                nodes['Footprint Stdev'] = nodes['Footprint Stdev'].replace(np.nan, 0).astype(float)
+                nodes['Complexity Mean'] = nodes['Complexity Mean'].replace(np.nan, 0).astype(float)
+                nodes['Complexity Stdev'] = nodes['Complexity Stdev'].replace(np.nan, 0).astype(float)
+                nodes['Perimeter Total'] = nodes['Perimeter Total'].replace(np.nan, 0).astype(float)
+                nodes['Perimeter Mean'] = nodes['Perimeter Mean'].replace(np.nan, 0).astype(float)
+                nodes['Perimeter Stdev'] = nodes['Perimeter Stdev'].replace(np.nan, 0).astype(float)
                 nodes['Counts'] = nodes['Counts'].replace(np.nan, 0).astype(int)
             
             if pop_attr:
@@ -302,14 +377,11 @@ class Map(ipyleaflet.Map):
 
                 if not use_tif:
                     pop_list, target_cols = get_population_data(self.country, use_tif=use_tif)
-                    for i, data in enumerate(zip(pop_list, target_cols)):
-                        proj_data = project_gdf(data[0])
-                        res_intersection = proj_data.overlay(nodes_buffer, how='intersection')
 
-                        # Add population sum
-                        pop_sum_series = res_intersection.groupby(['osmid'])[data[1]].sum()
-                        pop_sum_series.name = groups[i]
-                        nodes = nodes.join(pop_sum_series)
+                    for i, data in enumerate(zip(pop_list, target_cols)):
+                        proj_data = data[0].to_crs(nodes_buffer.crs)
+                        res_intersection = proj_data.overlay(nodes_buffer, how='intersection')
+                        nodes[groups[i]] = res_intersection.groupby(['osmid'])[data[1]].sum()
 
                     for name in groups:
                         nodes[name] = nodes[name].replace(np.nan, 0).astype(float)
@@ -359,7 +431,8 @@ class Map(ipyleaflet.Map):
                 pois['poi_col'] = pois.apply(lambda row: poi_col(row['amenity'], row['shop'], row['tourism'], row['leisure']), axis=1)
                 pois = pois[['id', 'osm_type','lon','lat','name','poi_col','geometry']]
 
-                pois = finetune_poi(pois, 'poi_col', poi_filter['replace_dict'], n=30)
+                pois = finetune_poi(pois, 'poi_col', poi_filter['replace_dict'], n=5)
+
                 pois = project_gdf(pois)
                 pois['geometry'] = pois.geometry.centroid
 
@@ -367,33 +440,46 @@ class Map(ipyleaflet.Map):
                 poi_series = res_intersection.groupby(['osmid'])['poi_col'].value_counts()
                 pois_df = pd.DataFrame(index = poi_series.index, data = poi_series.values).reset_index()
                 pois_df = pd.pivot(pois_df, index='osmid', columns='poi_col', values=0)
+
+                col_order = list(nodes.columns)
+                cols = list(['civic', 'commercial', 'entertainment', 'food', 'healthcare', 'institutional', 'recreational', 'social'])
+                col_order = col_order + cols
+
                 nodes = nodes.merge(pois_df, how='left', left_index=True, right_index=True).replace(np.nan,0) 
-                nodes = nodes.rename(columns = {'commercial':'Commercial', 'entertainment':'Entertainment','food':'Food','healthcare':'Healthcare','civic':'Civic', 'institutional':'Institutional'})
+
+                for i in cols:
+                    if i not in set(nodes.columns):
+                        nodes[i] = 0
+
+                nodes = nodes[col_order]
+                nodes = nodes.rename(columns = {'commercial':'Commercial', 'entertainment':'Entertainment','food':'Food','healthcare':'Healthcare','civic':'Civic', 'institutional':'Institutional', 'recreational':'Recreational', 'social':'Social'})
 
             if svi_attr:
-                pass
-                # svi_path = pkg_resources.resource_filename('urbanity', f"svi_data/{location}.geojson")
-                # svi_data = gpd.read_file(svi_path)
+                svi_path = pkg_resources.resource_filename('urbanity', f"svi_data/{location}.geojson")
+                svi_data = gpd.read_file(svi_path)
+                svi_data = project_gdf(svi_data)
 
-                # # returns gdf of image id, tile_id, indicators, and point coords
-                # res_intersection = svi_data.overlay(nodes_buffer, how='intersection')
+                # returns gdf of image id, tile_id, indicators, and point coords
+                res_intersection = svi_data.overlay(nodes_buffer, how='intersection')
                 
-                # indicators = ['Green View', 'Sky View', 'Building View', 'Road View']
-                # for indicator in indicators:
+                indicators = ['Green View', 'Sky View', 'Building View', 'Road View']
+                for indicator in indicators:
                     
-                #     svi_series = res_intersection.groupby(['osmid'])[indicator].mean()
-                #     svi_series.name = indicator
-                #     nodes = nodes.join(svi_series)
+                    svi_series = res_intersection.groupby(['osmid'])[indicator].mean()
+                    nodes[indicator] = svi_series
 
-                #     index_mean = nodes[indicator].mean()
-                #     nodes[indicator] = nodes[indicator].replace(np.nan, index_mean)
+                    index_mean = nodes[indicator].mean()
+                    nodes[indicator] = nodes[indicator].replace(np.nan, index_mean)
+            
+            nodes = nodes.drop(columns=['osmid','tags','timestamp','version','changeset']).reset_index()
+            edges = edges.reset_index()[['osmid','osm_type','u','v','length','highway','lanes','maxspeed','geometry']]
             
             print("--- %s seconds ---" % round(time.time() - start,3))
-            return G_buff_trunc, nodes, edges
+            return G_buff_trunc_loop, nodes, edges
 
         elif dual: 
             # First extract dictionary of osmids and lengths for original nodes associated with each edge
-            osmid_view = nx.get_edge_attributes(G_buff_trunc, "osmid")
+            osmid_view = nx.get_edge_attributes(G_buff_trunc_loop, "osmid")
             osmid_dict = {}
             for u,v in set(osmid_view.items()):
                 if u not in osmid_dict:
@@ -401,7 +487,7 @@ class Map(ipyleaflet.Map):
                 else: 
                     osmid_dict[(u[:2])].append(v)
 
-            length_view = nx.get_edge_attributes(G_buff_trunc, "length")
+            length_view = nx.get_edge_attributes(G_buff_trunc_loop, "length")
             length_dict = {}
             for u,v in set(length_view.items()):
                 if u not in length_dict:
@@ -409,14 +495,14 @@ class Map(ipyleaflet.Map):
                 else: 
                     length_dict[(u[:2])].append(v)
 
-            x_dict = nx.get_node_attributes(G_buff_trunc, "x")
-            y_dict = nx.get_node_attributes(G_buff_trunc, "y")
+            x_dict = nx.get_node_attributes(G_buff_trunc_loop, "x")
+            y_dict = nx.get_node_attributes(G_buff_trunc_loop, "y")
 
             # Create new placeholder graph and add edges as nodes and adjacency links between edges as new edges
             L = nx.empty_graph(0)
-            LG = nx.line_graph(G_buff_trunc)
+            LG = nx.line_graph(G_buff_trunc_loop)
             L.graph['crs'] = 'EPSG:4326'
-            for node in set(G_buff_trunc.edges()):
+            for node in set(G_buff_trunc_loop.edges()):
                 L.add_node(node, length = length_dict[node], osmids = osmid_dict[node], x = (x_dict[node[0]]+x_dict[node[1]])/2, y = (y_dict[node[0]]+y_dict[node[1]])/2, geometry=Point((x_dict[node[0]]+x_dict[node[1]])/2, (y_dict[node[0]]+y_dict[node[1]])/2))
             for u,v in set(LG.edges()):
                 L.add_edge(u[:2],v[:2])
@@ -442,7 +528,7 @@ class Map(ipyleaflet.Map):
                 total_area = math.pi*bandwidth**2
                 area_series = area_series / total_area
                 area_series = area_series.astype(float)
-                area_series.name = 'Footprint area'
+                area_series.name = 'Footprint Proportion'
 
                 L_nodes['unique'] = list(range(len(L_nodes)))
                 L_nodes = L_nodes.join(area_series, on = 'unique')
@@ -451,7 +537,7 @@ class Map(ipyleaflet.Map):
                 res_intersection['perimeter'] = res_intersection.geometry.length
                 perimeter_series = res_intersection.groupby(['unique'])['perimeter'].sum()
 
-                perimeter_series.name = 'Perimeter'
+                perimeter_series.name = 'Perimeter (m)'
                 L_nodes = L_nodes.join(perimeter_series, on = 'unique')
 
 
@@ -460,8 +546,8 @@ class Map(ipyleaflet.Map):
                 counts_series.name = 'Counts'
                 L_nodes = L_nodes.join(counts_series, on = 'unique')
                 
-                L_nodes['Footprint area'] = L_nodes['Footprint area'].replace(np.nan, 0).astype(float)
-                L_nodes['Perimeter'] = L_nodes['Perimeter'].replace(np.nan, 0).astype(float)
+                L_nodes['Footprint Proportion'] = L_nodes['Footprint Proportion'].replace(np.nan, 0).astype(float)
+                L_nodes['Perimeter (m)'] = L_nodes['Perimeter (m)'].replace(np.nan, 0).astype(float)
                 L_nodes['Counts'] = L_nodes['Counts'].replace(np.nan, 0).astype(int)
     
 
@@ -482,7 +568,6 @@ class Map(ipyleaflet.Map):
 
     def get_building_network(
             self, 
-            directory: str,
             layer_name: Optional[str] = 'Building Network', 
             polyline_style: Optional[dict] = {'style': {'color': 'black', 'opacity':0.5, 'weight':1.9},
                                 'hover_style': {'color': 'yellow' , 'opacity': 0.2}},  
@@ -490,7 +575,7 @@ class Map(ipyleaflet.Map):
             network_type: str = 'driving') -> MultiDiGraph:
         start = time.time()
         print('Creating data folder and downloading osm building data...')
-        fp = get_data(self.country, directory = directory)
+        fp = get_data(self.country, directory = self.directory)
         print('Data extracted successfully. Proceeding to construct building network.')
 
         # Project and buffer original polygon to examine nodes outside boundary
@@ -574,5 +659,196 @@ class Map(ipyleaflet.Map):
 
         return B_max, B_nodes, B_edges
 
+    def get_aggregate_stats(
+        self,
+        location: str,
+        column: str = None, 
+        bandwidth: int = 0,
+        network_type: str = 'driving') -> dict:
+        """Obtains descriptive statistics for bounding polygon without constructing network. Users can specify bounding polygon either by drawing on the map object, or uploading a geojson/shapefile.
+        If geojson/shape file contains multiple geometric objects, descriptive statistics will be returned for all entities. Results are returned in dictionary format. 
 
-    
+        Args:
+            location (str): Accepts city name or country name to obtain OpenStreetMap data.
+            column (str): Id or name column to identify zones. If None, uses shapefile index column.
+            data_path(str): Accepts path to shapefile or geojson object
+            bandwidth (int): Distance (m) to buffer site boundary. Defaults to 0.
+            network_type (str): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
+        Returns:
+            dict: Dictionary of aggregate values for polygon
+        """
+
+        start = time.time()
+        try:
+            fp = get_data(location, directory = self.directory)
+            print('Creating data folder and downloading osm street data...')
+        except KeyError:
+            fp = get_data(self.country, directory = self.directory)
+            print(f"KeyError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+        except KeyError:
+            raise ValueError('No osm data found for specified location.')
+
+        print('Data extracted successfully. Computing aggregates from shapefile.')
+
+        # Create dictionary keys based on column elements
+        attr_stats = {}
+        try:
+            for name in self.polygon_bounds[column]:
+                attr_stats[name] = {}
+        except KeyError:
+            for name in self.polygon_bounds.index:
+                attr_stats[name] = {}
+
+        # Load Global Data
+
+        # Population
+        poi_path = pkg_resources.resource_filename('urbanity', "map_data/poi_filter.json")
+        with open(poi_path) as poi_filter:
+            poi_filter = json.load(poi_filter)
+
+        def poi_col(amenity, shop, tourism, leisure):
+            value = amenity
+            if amenity == '' and shop not in poi_filter['food_set']:
+                value = 'commercial'
+            elif amenity == '' and shop in poi_filter['food_set']:
+                value = shop
+            elif amenity == '' and tourism != '':
+                value = 'entertainment'
+            elif amenity == '' and leisure != '':
+                value = 'recreational'
+            return value
+
+        # Get individual polygon data
+        for i, key in enumerate(attr_stats):
+
+            # Project and buffer original polygon
+            proj_gdf = project_gdf(self.polygon_bounds.iloc[[i],:])
+            proj_gdf_buffered = proj_gdf.buffer(bandwidth)
+            area = proj_gdf_buffered.geometry.area.values.item() / 1000000
+            
+            # Obtain pyrosm query object within spatial bounds
+            original_bbox = self.polygon_bounds.geometry[0]
+            buffered_tp = buffer_polygon(self.polygon_bounds.iloc[[i],:], bandwidth=bandwidth)
+            buffered_bbox = buffered_tp.geometry.values[0]
+            osm = pyrosm.OSM(fp, bounding_box=buffered_bbox)
+            nodes, edges = osm.get_network(network_type=network_type, nodes=True)
+
+
+            # Build networkx graph for pre-processing
+            G_buff = osm.to_graph(nodes, edges, graph_type="networkx", force_bidirectional=True, retain_all=True)
+            
+            # Add great circle length to network edges
+            G_buff = add_edge_lengths(G_buff)
+
+            # Simplify graph by removing nodes between endpoints and joining linestrings
+            G_buff_simple = simplify_graph(G_buff)
+
+            # Identify nodes inside and outside (buffered polygon) of original polygon
+            gs_nodes = graph_to_gdf(G_buff_simple, nodes=True)[["geometry"]]
+            to_keep = gs_nodes.within(original_bbox)
+            to_keep = gs_nodes[to_keep]
+            nodes_outside = gs_nodes[~gs_nodes.index.isin(to_keep.index)]
+            set_outside = nodes_outside.index
+
+            # Truncate network by edge if all neighbours fall outside original polygon
+            nodes_to_remove = set()
+            for node in set_outside:
+                neighbors = set(G_buff_simple.successors(node)) | set(G_buff_simple.predecessors(node))
+                if neighbors.issubset(nodes_outside):
+                    nodes_to_remove.add(node)
+            
+            G_buff_trunc = G_buff_simple.copy()
+            initial = G_buff_trunc.number_of_nodes()
+            G_buff_trunc.remove_nodes_from(nodes_to_remove)
+
+            # Remove unconnected subgraphs
+            max_wcc = max(nx.weakly_connected_components(G_buff_trunc), key=len)
+            G_buff_trunc = nx.subgraph(G_buff_trunc, max_wcc)
+
+            # Remove self loops
+            G_buff_trunc_loop = G_buff_trunc.copy()
+            G_buff_trunc_loop.remove_edges_from(nx.selfloop_edges(G_buff_trunc_loop))
+
+            nodes, edges = graph_to_gdf(G_buff_trunc_loop, nodes=True, edges=True)
+            nodes = nodes.fillna('')
+
+            # Add geometric/metric attributes
+            attr_stats[key]["No. of Nodes"] = len(nodes)
+            attr_stats[key]["No. of Edges"] = len(edges)
+            attr_stats[key]["Area (km2)"] = round(area,2)
+            attr_stats[key]["Node density (km2)"] = round(attr_stats[key]["No. of Nodes"] / area, 2)
+            attr_stats[key]["Edge density (km2)"]  = round(attr_stats[key]["No. of Edges"] / area, 2)
+            attr_stats[key]["Total Length (km)"] = round(G_buff_trunc_loop.size(weight='length')/1000,2)
+            attr_stats[key]["Mean Length (m) "] = round(attr_stats[key]["Total Length (km)"] / attr_stats[key]["No. of Edges"] * 1000, 2)
+            attr_stats[key]["Length density (km2)"] = round(attr_stats[key]["Total Length (km)"] /area, 2)
+            attr_stats[key]["Mean Degree"] = round(2 * attr_stats[key]["No. of Edges"] / attr_stats[key]["No. of Nodes"], 2)
+            attr_stats[key]["Mean Neighbourhood Degree"] = round(sum(nx.average_neighbor_degree(G_buff_trunc_loop).values()) / len(nodes), 2)
+
+            # Add Population
+            pois = osm.get_pois(custom_filter = poi_filter['custom_filter'])
+            pois = pois.replace(np.nan, '')
+            pois['poi_col'] = pois.apply(lambda row: poi_col(row['amenity'], row['shop'], row['tourism'], row['leisure']), axis=1)
+            pois = pois[['id', 'osm_type','lon','lat','name','poi_col','geometry']]
+            pois = finetune_poi(pois, 'poi_col', poi_filter['replace_dict'], n=2)
+            pois = project_gdf(pois)
+            pois['geometry'] = pois.geometry.centroid
+            res_intersection = pois.overlay(proj_gdf, how='intersection')
+            poi_series = res_intersection.groupby([column])['poi_col'].value_counts()
+
+            cols = ['Civic', 'Commercial', 'Entertainment', 'Food', 'Healthcare', 'Institutional', 'Recreational', 'Social']
+            for i in cols:
+                attr_stats[key][i] = 0
+            
+            for poi, counts in poi_series.items():
+                attr_stats[key][str.title(poi[1])] = counts
+
+            # Add Buildings
+            building = osm.get_buildings()
+            building_proj = project_gdf(building)
+            building_polygon = fill_and_expand(building_proj)
+
+            res_intersection = proj_gdf.overlay(building_polygon, how='intersection')
+
+            building_area = res_intersection.geometry.area.sum() / 1000000
+            attr_stats[key]["Building Footprint (Proportion)"] = round(building_area/attr_stats[key]["Area (km2)"]*100,2)
+            attr_stats[key]["Mean Building Footprint (m2)"] = round(res_intersection.geometry.area.mean(),2)
+            attr_stats[key]["Building Footprint St.dev (m2)"] = round(res_intersection.geometry.area.std(),2)
+            attr_stats[key]["Total Building Perimeter (km)"] = round((res_intersection.geometry.length.sum() / 1000), 2)
+            attr_stats[key]["No. of Buildings"] = len(res_intersection)
+            
+            # # Add perimeter
+            # res_intersection['perimeter'] = res_intersection.geometry.length
+            # perimeter_series = res_intersection.groupby(['osmid'])['perimeter'].sum()
+            # nodes['Perimeter Total'] = perimeter_series
+
+            # perimeter_mean_series = res_intersection.groupby(['osmid'])['perimeter'].mean()
+            # nodes['Perimeter Mean'] = perimeter_mean_series
+
+            # perimeter_std_series = res_intersection.groupby(['osmid'])['perimeter'].std()
+            # nodes['Perimeter Stdev'] = perimeter_std_series
+
+            # # Add complexity Mean and Std.dev
+            # res_intersection['complexity'] = res_intersection['perimeter'] / np.sqrt(np.sqrt(res_intersection['area']))   
+            # compl_mean_series = res_intersection.groupby(['osmid'])['complexity'].mean()
+            # nodes['Complexity Mean'] = compl_mean_series
+            
+            # compl_std_series = res_intersection.groupby(['osmid'])['complexity'].std()
+            # nodes['Complexity Stdev'] = compl_std_series
+
+            #     # Add counts
+            # counts_series = res_intersection['osmid'].value_counts()
+            # nodes['Counts'] = counts_series
+            
+            # nodes['Footprint Proportion'] = nodes['Footprint Proportion'].replace(np.nan, 0).astype(float)
+            # nodes['Footprint Mean'] = nodes['Footprint Mean'].replace(np.nan, 0).astype(float)
+            # nodes['Footprint Stdev'] = nodes['Footprint Stdev'].replace(np.nan, 0).astype(float)
+            # nodes['Complexity Mean'] = nodes['Complexity Mean'].replace(np.nan, 0).astype(float)
+            # nodes['Complexity Stdev'] = nodes['Complexity Stdev'].replace(np.nan, 0).astype(float)
+            # nodes['Perimeter Total'] = nodes['Perimeter Total'].replace(np.nan, 0).astype(float)
+            # nodes['Perimeter Mean'] = nodes['Perimeter Mean'].replace(np.nan, 0).astype(float)
+            # nodes['Perimeter Stdev'] = nodes['Perimeter Stdev'].replace(np.nan, 0).astype(float)
+            # nodes['Counts'] = nodes['Counts'].replace(np.nan, 0).astype(int)
+
+
+        
+            return attr_stats

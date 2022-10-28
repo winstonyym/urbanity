@@ -37,15 +37,32 @@ def get_population_data(country: str, use_tif = False):
         target_cols = []
         for group in groups:
             data_link = general_pop_dict[country][f'{group}_csv_url']
-            df = pd.read_csv(data_link)
-            for colname in list(df.columns):
+            pop_df = pd.read_csv(data_link)
+            for colname in list(pop_df.columns):
                 if 'population' in colname:
                     target_col = colname
-            df[target_col] = df[target_col].astype(int)
-            pop_gdf = gpd.GeoDataFrame(
-                data=df[target_col], 
-                crs = 'epsg:4326',
-                geometry = gpd.points_from_xy(df.longitude, df.latitude))
+                elif 'Population' in colname:
+                    target_col = colname
+                elif 'general' in colname:
+                    target_col = colname
+                elif 'General' in colname:
+                    target_col = colname
+                elif group in colname:
+                    target_col = colname
+                elif str.title(group) in colname:
+                    target_col = colname
+                
+            pop_df[target_col] = pop_df[target_col].astype(int)
+            try:
+                pop_gdf = gpd.GeoDataFrame(
+                    data=pop_df[target_col], 
+                    crs = 'epsg:4326',
+                    geometry = gpd.points_from_xy(pop_df.longitude, pop_df.latitude))
+            except AttributeError:
+                pop_gdf = gpd.GeoDataFrame(
+                    data=pop_df[target_col], 
+                    crs = 'epsg:4326',
+                    geometry = gpd.points_from_xy(pop_df.Lon, pop_df.Lat))
             groups_df.append(pop_gdf)
             target_cols.append(target_col)
 

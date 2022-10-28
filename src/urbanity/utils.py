@@ -32,7 +32,7 @@ def get_available_countries():
 def gdf_to_tensor():
     pass
 
-def finetune_poi(df, target, relabel_dict, n=30):
+def finetune_poi(df, target, relabel_dict, n=5):
     
     df2 = df.copy()
     for k,v in relabel_dict.items():

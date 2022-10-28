@@ -6,11 +6,11 @@ authors = ["winstonyym <winstonyym@u.nus.edu>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
+# poetry add scipy
 python = "^3.9"
 vt2geojson = "^0.2.1"
 networkx = "2.8.6"
 numpy = "1.23.3"
-pyrosm = "0.6.1"
 rasterio = "1.3.2"
 pyrobuf = "0.9.3"
 urllib3 = "^1.26.11"

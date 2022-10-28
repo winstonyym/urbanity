@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 
 def project_gdf(gdf):
+    # Get representative point
     mean_longitude = gdf["geometry"].representative_point().x.mean()
 
     # Compute UTM crs
@@ -442,14 +443,14 @@ def fill_and_expand(gdf):
     Returns:
         geopandas.geodataframe.GeoDataFrame: Modified dataframe with homogenous geometry type. 
     """    
-
+    gdf2 = gdf.copy()
     for i, geom in enumerate(gdf.geometry):
 
         if geom.geom_type == 'LineString':
-            gdf = gdf.drop(i, axis=0)
+            gdf2 = gdf2.drop(i)
 
         elif geom.geom_type=='MultiLineString':
-            linestring = gdf[gdf.index == i]
+            linestring = gdf.loc[[i],:]
             linestring_exploded = linestring.explode(index_parts=True)
 
             # Find bounding polygon
@@ -467,13 +468,16 @@ def fill_and_expand(gdf):
                 polygon_geom = Polygon(list(list(linestring_exploded.geometry.iloc[min_ind].coords)), 
                                   holes = holes)
                 polygon = gpd.GeoDataFrame(index=[0], crs=linestring.crs, geometry=[polygon_geom]) 
-                gdf = gdf.drop(i, axis=0)
-                gdf = gpd.GeoDataFrame(pd.concat([gdf, polygon], ignore_index=True), crs=gdf.crs) 
+                gdf2 = gpd.GeoDataFrame(pd.concat([gdf2, polygon], ignore_index=True), crs=gdf2.crs) 
 
             except ValueError:
-                gdf = gdf.drop(i, axis=0)          
-
+                gdf2 = gdf2.drop(i)    
+                
+    for i, geom in enumerate(gdf2.geometry):
+        if geom.geom_type == 'MultiLineString':
+            gdf2 = gdf2.drop(i)
+            
     # Expand MultiPolygons
-    gdf = gdf.explode(index_parts=True)
+    gdf2 = gdf2.explode(index_parts=True)
     
-    return gdf
+    return gdf2
