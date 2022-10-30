@@ -29,8 +29,9 @@ from pyrosm import get_data
 import rasterstats
 import networkit
 
-# Catch known warnings
+# Catch known warnings from shapely and geopandas
 warnings.filterwarnings("ignore", category=ShapelyDeprecationWarning) 
+warnings.filterwarnings("ignore", category=UserWarning) 
 
 # Import country coords
 country_dict = get_country_centroids()
@@ -418,14 +419,15 @@ class Map(ipyleaflet.Map):
 
                 def poi_col(amenity, shop, tourism, leisure):
                     value = amenity
-                    if amenity == '' and shop not in poi_filter['food_set']:
-                        value = 'commercial'
-                    elif amenity == '' and shop in poi_filter['food_set']:
-                        value = shop
-                    elif amenity == '' and tourism != '':
+                    if amenity == '' and tourism != '':
                         value = 'entertainment'
                     elif amenity == '' and leisure != '':
                         value = 'recreational'
+                    elif amenity == '' and shop in poi_filter['food_set']:
+                        value = shop
+                    elif amenity == '' and shop not in poi_filter['food_set']:
+                        value = 'commercial'
+                    
                     return value
                 
                 pois['poi_col'] = pois.apply(lambda row: poi_col(row['amenity'], row['shop'], row['tourism'], row['leisure']), axis=1)
@@ -664,6 +666,7 @@ class Map(ipyleaflet.Map):
         location: str,
         column: str = None, 
         bandwidth: int = 0,
+        use_tif: bool = False,
         network_type: str = 'driving') -> dict:
         """Obtains descriptive statistics for bounding polygon without constructing network. Users can specify bounding polygon either by drawing on the map object, or uploading a geojson/shapefile.
         If geojson/shape file contains multiple geometric objects, descriptive statistics will be returned for all entities. Results are returned in dictionary format. 
@@ -700,23 +703,37 @@ class Map(ipyleaflet.Map):
                 attr_stats[name] = {}
 
         # Load Global Data
+        local_crs = project_gdf(self.polygon_bounds).crs
 
-        # Population
+        # Points of Interest
         poi_path = pkg_resources.resource_filename('urbanity', "map_data/poi_filter.json")
         with open(poi_path) as poi_filter:
             poi_filter = json.load(poi_filter)
 
         def poi_col(amenity, shop, tourism, leisure):
             value = amenity
-            if amenity == '' and shop not in poi_filter['food_set']:
-                value = 'commercial'
-            elif amenity == '' and shop in poi_filter['food_set']:
-                value = shop
-            elif amenity == '' and tourism != '':
+            if amenity == '' and tourism != '':
                 value = 'entertainment'
             elif amenity == '' and leisure != '':
                 value = 'recreational'
+            elif amenity == '' and shop in poi_filter['food_set']:
+                value = shop
+            elif amenity == '' and shop not in poi_filter['food_set']:
+                value = 'commercial'
+            
             return value
+        
+        # Population
+        groups = ['PopSum', 'Men', 'Women', 'Elderly','Youth','Children']
+
+        if use_tif: 
+            # Using .tif for computation
+            src_list, rc_list = get_population_data(self.country, use_tif=use_tif)
+
+        if not use_tif:
+            pop_list, target_cols = get_population_data(self.country, use_tif=use_tif)
+            for i in range(len(pop_list)):
+                pop_list[i] = pop_list[i].to_crs(local_crs)
 
         # Get individual polygon data
         for i, key in enumerate(attr_stats):
@@ -724,10 +741,11 @@ class Map(ipyleaflet.Map):
             # Project and buffer original polygon
             proj_gdf = project_gdf(self.polygon_bounds.iloc[[i],:])
             proj_gdf_buffered = proj_gdf.buffer(bandwidth)
+            proj_gdf_buffered = gpd.GeoDataFrame(data=proj_gdf[column], crs = proj_gdf.crs, geometry = proj_gdf_buffered)
             area = proj_gdf_buffered.geometry.area.values.item() / 1000000
             
             # Obtain pyrosm query object within spatial bounds
-            original_bbox = self.polygon_bounds.geometry[0]
+            original_bbox = self.polygon_bounds.iloc[[i],:].geometry.values[0]
             buffered_tp = buffer_polygon(self.polygon_bounds.iloc[[i],:], bandwidth=bandwidth)
             buffered_bbox = buffered_tp.geometry.values[0]
             osm = pyrosm.OSM(fp, bounding_box=buffered_bbox)
@@ -771,7 +789,8 @@ class Map(ipyleaflet.Map):
 
             nodes, edges = graph_to_gdf(G_buff_trunc_loop, nodes=True, edges=True)
             nodes = nodes.fillna('')
-
+            
+            print(key)
             # Add geometric/metric attributes
             attr_stats[key]["No. of Nodes"] = len(nodes)
             attr_stats[key]["No. of Edges"] = len(edges)
@@ -784,49 +803,59 @@ class Map(ipyleaflet.Map):
             attr_stats[key]["Mean Degree"] = round(2 * attr_stats[key]["No. of Edges"] / attr_stats[key]["No. of Nodes"], 2)
             attr_stats[key]["Mean Neighbourhood Degree"] = round(sum(nx.average_neighbor_degree(G_buff_trunc_loop).values()) / len(nodes), 2)
 
-            # Add Population
+            # Add Points of Interest
             pois = osm.get_pois(custom_filter = poi_filter['custom_filter'])
-            pois = pois.replace(np.nan, '')
-            pois['poi_col'] = pois.apply(lambda row: poi_col(row['amenity'], row['shop'], row['tourism'], row['leisure']), axis=1)
-            pois = pois[['id', 'osm_type','lon','lat','name','poi_col','geometry']]
-            pois = finetune_poi(pois, 'poi_col', poi_filter['replace_dict'], n=2)
-            pois = project_gdf(pois)
-            pois['geometry'] = pois.geometry.centroid
-            res_intersection = pois.overlay(proj_gdf, how='intersection')
-            poi_series = res_intersection.groupby([column])['poi_col'].value_counts()
 
-            cols = ['Civic', 'Commercial', 'Entertainment', 'Food', 'Healthcare', 'Institutional', 'Recreational', 'Social']
-            for i in cols:
-                attr_stats[key][i] = 0
-            
-            for poi, counts in poi_series.items():
-                attr_stats[key][str.title(poi[1])] = counts
+            if pois is not None:
+                pois = pois.replace(np.nan, '')
+                for c in ['shop', 'tourism', 'leisure']:
+                    if c not in pois.columns:
+                        pois[c] = ''
+
+                pois['poi_col'] = pois.apply(lambda row: poi_col(row['amenity'], row['shop'], row['tourism'], row['leisure']), axis=1)
+                pois = pois[['id', 'osm_type','lon','lat','name','poi_col','geometry']]
+                pois = finetune_poi(pois, 'poi_col', poi_filter['replace_dict'], n=2)
+
+                if len(pois) == 0:
+                    cols = ['Civic', 'Commercial', 'Entertainment', 'Food', 'Healthcare', 'Institutional', 'Recreational', 'Social']
+                    for i in cols:
+                        attr_stats[key][i] = 0
+                
+                else: 
+                    pois = project_gdf(pois)
+                    pois['geometry'] = pois.geometry.centroid
+                    res_intersection = pois.overlay(proj_gdf_buffered, how='intersection')
+                    poi_series = res_intersection.groupby([column])['poi_col'].value_counts()
+
+                    cols = ['Civic', 'Commercial', 'Entertainment', 'Food', 'Healthcare', 'Institutional', 'Recreational', 'Social']
+                    for i in cols:
+                        attr_stats[key][i] = 0
+                    
+                    for poi, counts in poi_series.items():
+                        attr_stats[key][str.title(poi[1])] = counts
+
+            else:
+                cols = ['Civic', 'Commercial', 'Entertainment', 'Food', 'Healthcare', 'Institutional', 'Recreational', 'Social']
+                for i in cols:
+                    attr_stats[key][i] = 0
+                
 
             # Add Buildings
             building = osm.get_buildings()
             building_proj = project_gdf(building)
             building_polygon = fill_and_expand(building_proj)
 
-            res_intersection = proj_gdf.overlay(building_polygon, how='intersection')
+            res_intersection = proj_gdf_buffered.overlay(building_polygon, how='intersection')
 
             building_area = res_intersection.geometry.area.sum() / 1000000
             attr_stats[key]["Building Footprint (Proportion)"] = round(building_area/attr_stats[key]["Area (km2)"]*100,2)
             attr_stats[key]["Mean Building Footprint (m2)"] = round(res_intersection.geometry.area.mean(),2)
             attr_stats[key]["Building Footprint St.dev (m2)"] = round(res_intersection.geometry.area.std(),2)
-            attr_stats[key]["Total Building Perimeter (km)"] = round((res_intersection.geometry.length.sum() / 1000), 2)
-            attr_stats[key]["No. of Buildings"] = len(res_intersection)
-            
-            # # Add perimeter
-            # res_intersection['perimeter'] = res_intersection.geometry.length
-            # perimeter_series = res_intersection.groupby(['osmid'])['perimeter'].sum()
-            # nodes['Perimeter Total'] = perimeter_series
-
-            # perimeter_mean_series = res_intersection.groupby(['osmid'])['perimeter'].mean()
-            # nodes['Perimeter Mean'] = perimeter_mean_series
-
-            # perimeter_std_series = res_intersection.groupby(['osmid'])['perimeter'].std()
-            # nodes['Perimeter Stdev'] = perimeter_std_series
-
+            attr_stats[key]["Total Building Perimeter (m)"] = round(res_intersection.geometry.length.sum(), 2)
+            attr_stats[key]["Mean Building Perimeter (m)"] = round(res_intersection.geometry.length.mean(), 2)
+            attr_stats[key]["Building Perimeter St.dev (m)"] = round(res_intersection.geometry.length.std(),2)
+            attr_stats[key]["Mean Building Complexity"] = round(np.mean(res_intersection.geometry.length / np.sqrt(np.sqrt(res_intersection.geometry.area))),2)
+            attr_stats[key]["Building Complexity St.dev"] = round(np.std(res_intersection.geometry.length / np.sqrt(np.sqrt(res_intersection.geometry.area))),2)
             # # Add complexity Mean and Std.dev
             # res_intersection['complexity'] = res_intersection['perimeter'] / np.sqrt(np.sqrt(res_intersection['area']))   
             # compl_mean_series = res_intersection.groupby(['osmid'])['complexity'].mean()
@@ -849,6 +878,24 @@ class Map(ipyleaflet.Map):
             # nodes['Perimeter Stdev'] = nodes['Perimeter Stdev'].replace(np.nan, 0).astype(float)
             # nodes['Counts'] = nodes['Counts'].replace(np.nan, 0).astype(int)
 
+            # Add Population
+            if use_tif:
+                for group, src, rc in zip(groups, src_list, rc_list):
+                    stats = ['sum']
 
-        
-            return attr_stats
+                    result = rasterstats.zonal_stats(
+                        original_bbox, 
+                        rc[0], 
+                        nodata = 0, 
+                        affine = src.transform, 
+                        stats = stats
+                    )
+                    attr_stats[key][group] = round(result[0]['sum'])
+                
+            if not use_tif:
+                for i in range(len(pop_list)):
+                    res_intersection = pop_list[i].overlay(proj_gdf_buffered, how='intersection')
+                    attr_stats[key][groups[i]] = np.sum(res_intersection.iloc[:,0])
+
+
+        return attr_stats
