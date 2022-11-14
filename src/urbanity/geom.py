@@ -8,6 +8,14 @@ import pandas as pd
 import numpy as np
 
 def project_gdf(gdf):
+    """Utility function to project GeoDataFrames into local coordinates.
+
+    Args:
+        gdf (gpd.GeoDataFrame): A geopandas dataframe object.
+
+    Returns:
+        gpd.GeoDataFrame: A geopandas dataframe object projected to local coordinate.
+    """    
     # Get representative point
     mean_longitude = gdf["geometry"].representative_point().x.mean()
 
@@ -22,38 +30,35 @@ def project_gdf(gdf):
     return gdf_proj
 
 def buffer_polygon(gdf, bandwidth = 200):
+    """Utility function to buffer geometry by bandwidth (m). 
+    Geodataframes are first projected to local coordinates to allow for metric computation before being
+    re-projected to global coordinates. 
+
+    Args:
+        gdf (gpd.GeoDataFrame): A geopandas dataframe as input to be buffered.
+        bandwidth (int, optional): Distance to buffer geometry. Defaults to 200.
+
+    Returns:
+        gpd.GeoDataFrame: A buffered geopandas dataframe with global projection.
+    """    
     buffer_zone = project_gdf(gdf).buffer(bandwidth)
     buffered_gdf = buffer_zone.to_crs(4326)
     return buffered_gdf
 
-def great_circle_vec(lat1, lng1, lat2, lng2, earth_radius=6_371_009):
-    """
-    Calculate great-circle distances between pairs of points.
+def great_circle_vec(lat1, lng1, lat2, lng2, earth_radius=6371009):
+    """Computes the great-circle distance (straightline) between point pairs.
 
-    Vectorized function to calculate the great-circle distance between two
-    points' coordinates or between arrays of points' coordinates using the
-    haversine formula. Expects coordinates in decimal degrees.
+    Args:
+        lat1 (float): Latitude of first point.
+        lng1 (float): Longitude of first point.
+        lat2 (float): Latitude of second point. 
+        lng2 (_type_): Longitude of second point. 
+        earth_radius (int, optional): Radius of earth. Defaults to 6_371_009.
 
-    Parameters
-    ----------
-    lat1 : float or numpy.array of float
-        first point's latitude coordinate
-    lng1 : float or numpy.array of float
-        first point's longitude coordinate
-    lat2 : float or numpy.array of float
-        second point's latitude coordinate
-    lng2 : float or numpy.array of float
-        second point's longitude coordinate
-    earth_radius : float
-        earth's radius in units in which distance will be returned (default is
-        meters)
+    Returns:
+        float: Great circle distance between point 1 and point 2.
+    """    
 
-    Returns
-    -------
-    dist : float or numpy.array of float
-        distance from each (lat1, lng1) to each (lat2, lng2) in units of
-        earth_radius
-    """
     y1 = np.deg2rad(lat1)
     y2 = np.deg2rad(lat2)
     dy = y2 - y1
@@ -71,6 +76,18 @@ def great_circle_vec(lat1, lng1, lat2, lng2, earth_radius=6_371_009):
 
 
 def add_edge_lengths(G, precision=3):
+    """Function to incorporate edge length information into a network graph (G).
+
+    Args:
+        G (nx.MultiDiGraph): Urban street network graph with nodes and edges information.
+        precision (int, optional): Number of decimal places to round edge lengths. Defaults to 3.
+
+    Raises:
+        KeyError: Missing edge or node information.
+
+    Returns:
+        nx.MultiDiGraph: Urban street network graph with added edge length information.
+    """    
     uvk = tuple(G.edges)
     x = G.nodes(data="x")
     y = G.nodes(data="y")
@@ -79,7 +96,7 @@ def add_edge_lengths(G, precision=3):
         # two-dimensional array of coordinates: y0, x0, y1, x1
         c = np.array([(y[u], x[u], y[v], x[v]) for u, v, k in uvk])
         
-    except KeyError:  # pragma: no cover
+    except KeyError:  
         raise KeyError("some edges missing nodes, possibly due to input data clipping issue")
         
     dists = great_circle_vec(c[:, 0], c[:, 1], c[:, 2], c[:, 3]).round(precision)
@@ -89,32 +106,19 @@ def add_edge_lengths(G, precision=3):
     return G
 
 def _is_endpoint(G, node, strict=True):
+    """Wrapper function to check if nodes are endpoints from OSMnx: https://github.com/gboeing/osmnx
+    Return nodes that correspond to real intersections or deadends in a street network.
+
+    Args:
+        G (nx.MultiDiGraph): Urban street network with nodes and edge information.
+        node (int): osmid of target node
+        strict (bool, optional): If False, allow nodes with different osmid edges to be end points 
+        even if they fail specified endpoint rules. Defaults to True.
+
+    Returns:
+        bool: True/False to whether node is an endpoint.
     """
-    Is node a true endpoint of an edge.
 
-    Return True if the node is a "real" endpoint of an edge in the network,
-    otherwise False. OSM data includes lots of nodes that exist only as points
-    to help streets bend around curves. An end point is a node that either:
-    1) is its own neighbor, ie, it self-loops.
-    2) or, has no incoming edges or no outgoing edges, ie, all its incident
-    edges point inward or all its incident edges point outward.
-    3) or, it does not have exactly two neighbors and degree of 2 or 4.
-    4) or, if strict mode is false, if its edges have different OSM IDs.
-
-    Parameters
-    ----------
-    G : networkx.MultiDiGraph
-        input graph
-    node : int
-        the node to examine
-    strict : bool
-        if False, allow nodes to be end points even if they fail all other rules
-        but have edges with different OSM IDs
-
-    Returns
-    -------
-    bool
-    """
     neighbors = set(list(G.predecessors(node)) + list(G.successors(node)))
     n = len(neighbors)
     d = G.degree(node)
@@ -164,28 +168,22 @@ def _is_endpoint(G, node, strict=True):
         return False
     
 def _build_path(G, endpoint, endpoint_successor, endpoints):
-    """
-    Build a path of nodes from one endpoint node to next endpoint node.
+    """Wrapper function to build path and connect endpoint nodes from OSMnx: https://github.com/gboeing/osmnx
+    Returns a osmid sequence where first and last item correspond to endpoints. 
 
-    Parameters
-    ----------
-    G : networkx.MultiDiGraph
-        input graph
-    endpoint : int
-        the endpoint node from which to start the path
-    endpoint_successor : int
-        the successor of endpoint through which the path to the next endpoint
-        will be built
-    endpoints : set
-        the set of all nodes in the graph that are endpoints
+    Args:
+        G (_type_): Urban network graph with nodes and edges information.
+        endpoint (int): osmid for start node
+        endpoint_successor (int): osmid for subsequent interspatially connected nodes
+        endpoints (set): Set of all osmids corresponding to endpoint nodes.
 
-    Returns
-    -------
-    path : list
-        the first and last items in the resulting path list are endpoint
-        nodes, and all other items are interstitial nodes that can be removed
-        subsequently
-    """
+    Raises:
+        Exception: Unexpected simplify pattern handling.
+
+    Returns:
+        list: A sequence of osmids where first and last item are endpoints.
+    """    
+    
     # start building path from endpoint node through its successor
     path = [endpoint, endpoint_successor]
 
@@ -232,24 +230,18 @@ def _build_path(G, endpoint, endpoint_successor, endpoints):
     return path
 
 def _get_paths_to_simplify(G, strict=True):
-    """
-    Generate all the paths to be simplified between endpoint nodes.
+    """Wrapper function to obtain list of simplified paths OSMnx: https://github.com/gboeing/osmnx
+    Returns a list of paths to be simplfiied. 
 
-    The path is ordered from the first endpoint, through the interstitial nodes,
-    to the second endpoint.
+    Args:
+        G (nx.MultiDiGraph): Urban network graph with nodes and edges information.
+        strict (bool, optional): If False, allow nodes with different osmid edges to be end points 
+        even if they fail specified endpoint rules. Defaults to True.
 
-    Parameters
-    ----------
-    G : networkx.MultiDiGraph
-        input graph
-    strict : bool
-        if False, allow nodes to be end points even if they fail all other rules
-        but have edges with different OSM IDs
+    Yields:
+        list: List of simplified paths.
+    """    
 
-    Yields
-    ------
-    path_to_simplify : list
-    """
     # first identify all the nodes that are endpoints
     endpoints = set([n for n in G.nodes if _is_endpoint(G, n, strict=strict)])
 
@@ -263,35 +255,22 @@ def _get_paths_to_simplify(G, strict=True):
                 yield _build_path(G, endpoint, successor, endpoints)
                 
 def simplify_graph(G, strict=True, remove_rings=True):
+    """Wrapper function to simplified network graph from OSMnx: https://github.com/gboeing/osmnx
+    Returns a simplified graph where interstitial nodes are removed and geometry of original edges are preserved. 
+
+    Args:
+        G (nx.MultiDiGraph): Urban network graph with nodes and edges information.
+        strict (bool, optional): If False, allow nodes with different osmid edges to be end points 
+        even if they fail specified endpoint rules. Defaults to True.
+        remove_rings (bool, optional): Remove isolated rings with self-loops. Defaults to True.
+
+    Raises:
+        Exception: Error if graph has already been simplified.
+
+    Returns:
+        nx.MultiDiGraph: Returns a simplified graph that have interstitial nodes removed. 
     """
-    Simplify a graph's topology by removing interstitial nodes.
-
-    Simplifies graph topology by removing all nodes that are not intersections
-    or dead-ends. Create an edge directly between the end points that
-    encapsulate them, but retain the geometry of the original edges, saved as
-    a new `geometry` attribute on the new edge. Note that only simplified
-    edges receive a `geometry` attribute. Some of the resulting consolidated
-    edges may comprise multiple OSM ways, and if so, their multiple attribute
-    values are stored as a list.
-
-    Parameters
-    ----------
-    G : networkx.MultiDiGraph
-        input graph
-    strict : bool
-        if False, allow nodes to be end points even if they fail all other
-        rules but have incident edges with different OSM IDs. Lets you keep
-        nodes at elbow two-way intersections, but sometimes individual blocks
-        have multiple OSM IDs within them too.
-    remove_rings : bool
-        if True, remove isolated self-contained rings that have no endpoints
-
-    Returns
-    -------
-    G : networkx.MultiDiGraph
-        topologically simplified graph, with a new `geometry` attribute on
-        each simplified edge
-    """
+    
     if "simplified" in G.graph and G.graph["simplified"]:  # pragma: no cover
         raise Exception("This graph has already been simplified, cannot simplify it again.")
 
@@ -382,6 +361,21 @@ def simplify_graph(G, strict=True, remove_rings=True):
     return G
 
 def graph_to_gdf(G, nodes=False, edges=False, dual=False):
+    """Utility function to obtain both nodes and edges dataframes from a networkx graph object. 
+
+    Args:
+        G (nx.MultiDiGraph): Urban network graph with nodes and edges information.
+        nodes (bool, optional): If True, returns nodes dataframe. Defaults to False.
+        edges (bool, optional): If True, returns edges dataframe. Defaults to False.
+        dual (bool, optional): If True, returns both nodes and edges dataframes. Defaults to False.
+
+    Raises:
+        ValueError: Graph does not contain any nodes.
+        ValueError: Graph does not contain any edges.
+
+    Returns:
+        gpd.GeoDataFrame: A geopandas dataframe object with attribute table for nodes and edges. 
+    """    
 
     crs = G.graph['crs']
     if nodes:

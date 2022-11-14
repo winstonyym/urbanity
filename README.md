@@ -1,25 +1,43 @@
-# urbanity
+[![PyPI version](https://badge.fury.io/py/urbanity.svg)](https://badge.fury.io/py/urbanity)
+[![PyPI - Downloads](https://img.shields.io/pypi/dm/urbanity)](https://badge.fury.io/py/urbanity)
+[![Documentation Status](https://img.shields.io/readthedocs/urbanity)](https://urbanity.readthedocs.io/)
+# Urbanity
 
-Urbanity is a python package to model and understand urban complexity. This package is currently under development.
+**Urbanity** is a network-based Python package to automate the construction of feature rich (contextual and semantic) urban networks at any geographical scale. Through an accessible and simple to use interface, users can request heterogeneous urban information such as street view imagery, building morphology, population (including sub-group), and points of interest for target areas of interest. 
 
-## Installation
+If you use Urbanity in your work, please cite:
+(*Urbanity is currently under review.*)
+## Designed for urban planners
+Urbanity is designed in an object-oriented approach that parallels the urban planning process. The urban data science pipeline starts with a base map which users can use to explore their site. Subsequently, there are two ways to specify geographical area of interest: 1) drawing with the polygon and box tools provided; or 2) providing your own polygon shapefiles (all common formats .shp/.geojson are supported). 
+
+Towards exploring complexities underlying urban systems and facilitating comparative study between cities, Urbanity is developed to facilitate downstream descriptive, modelling, and predictive urban analytical tasks.
+## Quickstart
+*How do I install Urbanity?*
+
+Urbanity is built on several geospatial packages (e.g., GeoPandas, ipyleaflet, rasterio, etc.,) that are best compiled through conda-forge. For seamless installation, we provide an environment.yml file for users to create their own conda environment. Please follow the steps below to ensure proper installation:
+
+1) Navigate to a location of choice (e.g., Desktop or project folder).
+2) Download environment.yml file and place it at the location of choice (Step 1).
+3) Open up a terminal/command prompt and input the following command:
 
 ```Terminal
-$ pip install urbanity
+$ conda env create -f environment.yml
+$ conda activate urbanity
 ```
 
-## Usage
+4) Installation completed and you should be able to use urbanity without issues.
 
-- TODO
+(Optional) For JupyterLab / JupyterNotebook users, you can additionally add a notebook kernel via:
 
-## Contributing
+```Terminal
+$ python -m ipykernel install --user --name=urbanity
+$ jupyter lab
+```
 
-Interested in contributing? Check out the contributing guidelines. Please note that this project is released with a Code of Conduct. By contributing to this project, you agree to abide by its terms.
+## What can I do with Urbanity?
+We demonstrate how you can conduct a diverse range of urban analytical tasks (such as graph machine learning, network assortativity analysis, and benchmarking across cities) with Urbanity. Check out the usage examples/tutorials in the [examples](https://github.com/urbanity/urbanity-examples) repo.
 
+Detailed documentation is available at [documentation](https://urbanity.readthedocs.io/).
 ## License
 
 `urbanity` was created by winstonyym. It is licensed under the terms of the MIT license.
-
-## Credits
-
-`urbanity` was created with [`cookiecutter`](https://cookiecutter.readthedocs.io/en/latest/) and the `py-pkgs-cookiecutter` [template](https://github.com/py-pkgs/py-pkgs-cookiecutter).

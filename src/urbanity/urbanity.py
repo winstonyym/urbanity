@@ -1,4 +1,4 @@
-# main module
+# import base packages
 from ipaddress import collapse_addresses
 import os
 import json
@@ -10,11 +10,13 @@ import pkg_resources
 from typing import Optional, Union
 from webbrowser import get
 
+# import module functions and classes
 from .utils import get_country_centroids, finetune_poi
 from .geom import *
-from .population import get_population_data
+from .population import get_population_data, get_tiled_population_data
 from .topology import compute_centrality, merge_nx_property, merge_nx_attr
 
+# import external functions and classes
 import numpy as np
 import networkx as nx
 from networkx import MultiDiGraph
@@ -37,7 +39,12 @@ warnings.filterwarnings("ignore", category=UserWarning)
 country_dict = get_country_centroids()
 class Map(ipyleaflet.Map):
 
-    def __init__(self, country: Optional[str] = None, **kwargs):
+    def __init__(self, country: str = None, **kwargs):
+        """Instantiates a map object that inherits from ipyleaflet.Map. 
+
+        Args:
+            country (str, optional): Name of country to position map view. Defaults to None.
+        """        
         self.bbox = None
         self.polygon_bounds = None
 
@@ -54,7 +61,7 @@ class Map(ipyleaflet.Map):
             try:
                 self.center = country_dict[country]['coords']
             except KeyError as err:
-                print(f"KeyError: {err}. Please manually input center coordinates.")
+                print(f"KeyError: {err}. Please manually input center coordinates by passing longitude and latitude information to the `center` argument.")
             finally:
                 self.country = country
         
@@ -94,6 +101,12 @@ class Map(ipyleaflet.Map):
         self.add_layer(LocalTileLayer(path="http://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}", name = 'Google Terrain'))
 
     def add_bbox(self, show: bool = False, remove: bool = True):
+        """Specifies drawn bounding box as geographic extent.
+
+        Args:
+            show (bool, optional): If True, creates another map view. Defaults to False.
+            remove (bool, optional): If True, removes drawn bounding box from map after adding it as an attribute. Defaults to True.
+        """        
 
         t_index = None
         
@@ -124,19 +137,25 @@ class Map(ipyleaflet.Map):
 
             # Remove drawing on self and close display
             if remove == True: 
-                print('Assigned bbox attribute to self object. Removing drawn boundary.')
+                print('Assigned bbox to map object. Removing drawn boundary.')
                 self.controls[t_index].clear()
             else: 
-                print('Assigned bbox attribute to self object.')
+                print('Assigned bbox map object.')
     
     def add_polygon_boundary(
         self, 
         filepath: str,
-        layer_name: Optional[str] = 'Site', 
-        polygon_style: Optional[dict] = {'style': {'color': 'black', 'fillColor': '#3366cc', 'opacity':0.05, 'weight':1.9, 'dashArray':'2', 'fillOpacity':0.6},
+        layer_name: str = 'Site', 
+        polygon_style: dict = {'style': {'color': 'black', 'fillColor': '#3366cc', 'opacity':0.05, 'weight':1.9, 'dashArray':'2', 'fillOpacity':0.6},
                                          'hover_style': {'fillColor': 'red' , 'fillOpacity': 0.2}},                   
-        show: bool = False, 
-        remove: bool = True) -> None:
+        show: bool = False) -> None:
+        """Adds geographical boundary from specified filepath. Accepts .geojson and .shapefile objects.
+
+        Args:
+            filepath (str): Filepath to vector file.
+            layer_name (str, optional): Layer name to display on map object. Defaults to 'Site'.
+            polygon_style (dict, optional): Default visualisation parameters to display geographical layer. Defaults to {'style': {'color': 'black', 'fillColor': '#3366cc', 'opacity':0.05, 'weight':1.9, 'dashArray':'2', 'fillOpacity':0.6}, 'hover_style': {'fillColor': 'red' , 'fillOpacity': 0.2}}.
+        """        
 
         if filepath:
             # GeoJSON string file
@@ -151,10 +170,10 @@ class Map(ipyleaflet.Map):
                    hover_style=polygon_style['hover_style'],
                    name = layer_name)
         self.add_layer(geo_data)
-        if show:
-            display(self)
         
     def remove_polygon_boundary(self) -> None:
+        """Removes polygon boundary from map object.
+        """        
         polygon_exists = False
         for i in self.layers:
             if isinstance(i, ipyleaflet.leaflet.GeoData):
@@ -176,15 +195,11 @@ class Map(ipyleaflet.Map):
             poi_attr: bool = True,
             svi_attr: bool = False,
             use_tif: bool = False,
-            layer_name: str = 'Street Network', 
-            polyline_style: dict = {'style': {'color': 'black', 'opacity':0.5, 'weight':1.9},
-                                'hover_style': {'color': 'yellow' , 'opacity': 0.2}},  
-            show: bool = False, 
             dual: bool = False) -> MultiDiGraph:
         """Function to generate either primal planar or dual (edge) networks. If multiple geometries are provided, 
         network is constructed for only the first entry. Please merge geometries before use.
-        Bandwidth allows to account for outside the network that share immediate neighbours with nodes 
-        within target area. *_attr arguments can be toggled on or off to allow computation of additional geographic information into networks.
+        Bandwidth (m) can be specified to buffer network, obtaining neighbouring nodes within buffered area of network.
+        *_attr arguments can be toggled on or off to allow computation of additional geographic information into networks.
 
         Args:
             location (str): Accepts city name or country name to obtain OpenStreetMap data.
@@ -195,9 +210,6 @@ class Map(ipyleaflet.Map):
             pop_attr (bool): Specifies whether population attributes should be included. Defaults to True.
             poi_attr (bool): Specifies whether points of interest attributes should be included. Defaults to True.
             use_tif (bool): Specifies whether csv or tif should be used to construct population attributes. Defaults to False.
-            layer_name (str): Layer name to display in ipyleafet. Defaults to 'Street Network'.
-            polyline_style (dict): Style dictionary for plotting vector layers in ipyleaflet. Defaults to {'style': {'color': 'black', 'opacity':0.5, 'weight':1.9}, 'hover_style': {'color': 'yellow' , 'opacity': 0.2}}.
-            show (bool): Specifies whether a new map view should be created at line location. Defaults to False.
             dual (bool): If true, creates a dual (edge) network graph. Defaults to False.
             
         Raises:
@@ -231,6 +243,7 @@ class Map(ipyleaflet.Map):
         # Obtain nodes and edges within buffered polygon
         osm = pyrosm.OSM(fp, bounding_box=buffered_bbox)
         nodes, edges = osm.get_network(network_type=network_type, nodes=True)
+        
 
         if building_attr:
             # Get building spatial data and project 
@@ -278,7 +291,7 @@ class Map(ipyleaflet.Map):
         nodes, edges = graph_to_gdf(G_buff_trunc_loop, nodes=True, edges=True)
         nodes = nodes.fillna('')
 
-
+        print(f'Network constructed. Time taken: {round(time.time() - start)}.')
 
         # If not dual representation graph
         if dual == False:
@@ -288,7 +301,7 @@ class Map(ipyleaflet.Map):
             nodes_buffer = nodes_buffer.set_geometry('geometry')
             nodes_buffer = nodes_buffer.drop(columns = ['osmid'])
             nodes_buffer = nodes_buffer.reset_index()
-
+            
             if graph_attr:
 
                 # Compute graph attributes
@@ -319,7 +332,10 @@ class Map(ipyleaflet.Map):
                 nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.EigenvectorCentrality, 'Eigenvector Centrality')
                 nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.KatzCentrality, 'Katz Centrality')
                 nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.PageRank, 'PageRank', 0.85, 1e-8, networkit.centrality.SinkHandling.NoSinkHandling, True)
-
+            
+            print(f'Topologic/metric attributes computed. Time taken: {round(time.time() - start)}.')
+            
+            # If building_attr is True, compute and add building attributes.
             if building_attr:
 
                 # Compute and add building attributes
@@ -362,6 +378,7 @@ class Map(ipyleaflet.Map):
                 counts_series = res_intersection['osmid'].value_counts()
                 nodes['Counts'] = counts_series
                 
+                # Add building attributes to node dataframe
                 nodes['Footprint Proportion'] = nodes['Footprint Proportion'].replace(np.nan, 0).astype(float)
                 nodes['Footprint Mean'] = nodes['Footprint Mean'].replace(np.nan, 0).astype(float)
                 nodes['Footprint Stdev'] = nodes['Footprint Stdev'].replace(np.nan, 0).astype(float)
@@ -372,12 +389,18 @@ class Map(ipyleaflet.Map):
                 nodes['Perimeter Stdev'] = nodes['Perimeter Stdev'].replace(np.nan, 0).astype(float)
                 nodes['Counts'] = nodes['Counts'].replace(np.nan, 0).astype(int)
             
-            if pop_attr:
+            print(f'Building attributes computed. Time taken: {round(time.time() - start)}.')
 
+            # If pop_attr is True, compute and add population attributes.
+            if pop_attr:
+                large_countries = ['United States']
                 groups = ['PopSum', 'Men', 'Women', 'Elderly','Youth','Children']
 
-                if not use_tif:
-                    pop_list, target_cols = get_population_data(self.country, use_tif=use_tif)
+                # Use csv for small countries
+                if not use_tif and self.country not in large_countries:
+                    pop_list, target_cols = get_population_data(self.country, 
+                                                                use_tif=use_tif,
+                                                                bounding_poly=self.polygon_bounds)
 
                     for i, data in enumerate(zip(pop_list, target_cols)):
                         proj_data = data[0].to_crs(nodes_buffer.crs)
@@ -386,15 +409,28 @@ class Map(ipyleaflet.Map):
 
                     for name in groups:
                         nodes[name] = nodes[name].replace(np.nan, 0).astype(float)
+            
+                # If big country, use csv and custom tiled population data: (e.g. USA: https://figshare.com/articles/dataset/USA_TILE_POPULATION/21502296)
+                elif not use_tif and self.country in large_countries:
+                    pop_list, target_cols = get_tiled_population_data(self.country, bounding_poly = self.polygon_bounds)
                     
+                    for i, data in enumerate(zip(pop_list, target_cols)):
+                        proj_data = data[0].to_crs(nodes_buffer.crs)
+                        res_intersection = proj_data.overlay(nodes_buffer, how='intersection')
+                        nodes[groups[i]] = res_intersection.groupby(['osmid'])[data[1]].sum()
+
+                    for name in groups:
+                        nodes[name] = nodes[name].replace(np.nan, 0).astype(float)
+                   
+                # If use_tif is True, use geotiff for population computation instead of csv files  
                 if use_tif: 
-                    # Using .tif for computation
-                    src_list, rc_list = get_population_data(self.country, use_tif=use_tif)
+
+                    # Using .geotiff for computation
+                    src_list, rc_list = get_population_data(self.country, use_tif=use_tif, bounding_poly = self.polygon_bounds)
                     nodes_buffer = nodes_buffer.to_crs('epsg:4326')
                     
                     for group, src, rc in zip(groups, src_list, rc_list):
                         stats = ['sum']
-
                         result = rasterstats.zonal_stats(
                             nodes_buffer, 
                             rc[0], 
@@ -408,15 +444,21 @@ class Map(ipyleaflet.Map):
                         # Add population sum
                         nodes[group] = list(result['sum'])
                         nodes[group] = nodes[group].replace(np.nan, 0).astype(int)
-                
+
+            print(f'Population attributes computed. Time taken: {round(time.time() - start)}.')   
+
+            # If poi_attr is True, compute and add poi attributes.
             if poi_attr:
+                # Load poi information 
                 poi_path = pkg_resources.resource_filename('urbanity', "map_data/poi_filter.json")
                 with open(poi_path) as poi_filter:
                     poi_filter = json.load(poi_filter)
                 
+                # Get osm pois based on custom filter
                 pois = osm.get_pois(custom_filter = poi_filter['custom_filter'])
                 pois = pois.replace(np.nan, '')
 
+                # Relabel amenities to common typology
                 def poi_col(amenity, shop, tourism, leisure):
                     value = amenity
                     if amenity == '' and tourism != '':
@@ -433,11 +475,13 @@ class Map(ipyleaflet.Map):
                 pois['poi_col'] = pois.apply(lambda row: poi_col(row['amenity'], row['shop'], row['tourism'], row['leisure']), axis=1)
                 pois = pois[['id', 'osm_type','lon','lat','name','poi_col','geometry']]
 
+                # Remove amenities that have counts of less than n=5
                 pois = finetune_poi(pois, 'poi_col', poi_filter['replace_dict'], n=5)
 
                 pois = project_gdf(pois)
                 pois['geometry'] = pois.geometry.centroid
 
+                # Get intersection of amenities with node buffer
                 res_intersection = pois.overlay(nodes_buffer, how='intersection')
                 poi_series = res_intersection.groupby(['osmid'])['poi_col'].value_counts()
                 pois_df = pd.DataFrame(index = poi_series.index, data = poi_series.values).reset_index()
@@ -447,6 +491,7 @@ class Map(ipyleaflet.Map):
                 cols = list(['civic', 'commercial', 'entertainment', 'food', 'healthcare', 'institutional', 'recreational', 'social'])
                 col_order = col_order + cols
 
+                # Add poi attributes to dataframe of nodes
                 nodes = nodes.merge(pois_df, how='left', left_index=True, right_index=True).replace(np.nan,0) 
 
                 for i in cols:
@@ -456,6 +501,9 @@ class Map(ipyleaflet.Map):
                 nodes = nodes[col_order]
                 nodes = nodes.rename(columns = {'commercial':'Commercial', 'entertainment':'Entertainment','food':'Food','healthcare':'Healthcare','civic':'Civic', 'institutional':'Institutional', 'recreational':'Recreational', 'social':'Social'})
 
+            print(f'Points of interest computed. Time taken: {round(time.time() - start)}.')
+
+            # If svi_attr is True, compute and add svi attributes.
             if svi_attr:
                 svi_path = pkg_resources.resource_filename('urbanity', f"svi_data/{location}.geojson")
                 svi_data = gpd.read_file(svi_path)
@@ -464,6 +512,7 @@ class Map(ipyleaflet.Map):
                 # returns gdf of image id, tile_id, indicators, and point coords
                 res_intersection = svi_data.overlay(nodes_buffer, how='intersection')
                 
+                # Compute SVI indices
                 indicators = ['Green View', 'Sky View', 'Building View', 'Road View']
                 for indicator in indicators:
                     
@@ -473,12 +522,14 @@ class Map(ipyleaflet.Map):
                     index_mean = nodes[indicator].mean()
                     nodes[indicator] = nodes[indicator].replace(np.nan, index_mean)
             
+            # Add computed indices to nodes dataframe
             nodes = nodes.drop(columns=['osmid','tags','timestamp','version','changeset']).reset_index()
             edges = edges.reset_index()[['osmid','osm_type','u','v','length','highway','lanes','maxspeed','geometry']]
-            
-            print("--- %s seconds ---" % round(time.time() - start,3))
+            print(f'SVI attributes computed. Time taken: {round(time.time() - start)}.')
+            print("Total elapsed time --- %s seconds ---" % round(time.time() - start))
             return G_buff_trunc_loop, nodes, edges
 
+        # If dual is True, construct dual graph with midpoint of original edges as nodes and new edges as adjacency between streets.
         elif dual: 
             # First extract dictionary of osmids and lengths for original nodes associated with each edge
             osmid_view = nx.get_edge_attributes(G_buff_trunc_loop, "osmid")
@@ -557,24 +608,21 @@ class Map(ipyleaflet.Map):
 
             return L, L_nodes, L_edges
 
-    def remove_street_network(self) -> None:
-        network_exists = False
-        for i in self.layers:
-            if isinstance(i, ipyleaflet.leaflet.GeoData):
-                network_exists = True
-        if network_exists:
-            self.remove_layer(self.layers[len(self.layers)-1])
-            print('Network layer removed.')
-        else:
-            print('No network layer found on map.')
 
     def get_building_network(
             self, 
-            layer_name: Optional[str] = 'Building Network', 
-            polyline_style: Optional[dict] = {'style': {'color': 'black', 'opacity':0.5, 'weight':1.9},
-                                'hover_style': {'color': 'yellow' , 'opacity': 0.2}},  
-            show: Optional[bool] = False,
             network_type: str = 'driving') -> MultiDiGraph:
+        """Generate a network where nodes correspond to building centroids and edges connect buildings within threshold distance of one another. 
+
+        Args:
+            network_type (str, optional): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
+
+        Raises:
+            Exception: No bounding box found. 
+
+        Returns:
+            nx.MultiDiGraph: Returns a building network object. 
+        """        
         start = time.time()
         print('Creating data folder and downloading osm building data...')
         fp = get_data(self.country, directory = self.directory)
@@ -645,17 +693,6 @@ class Map(ipyleaflet.Map):
 
         B_nodes, B_edges = graph_to_gdf(B_max, nodes=True, edges=True, dual=True)
         B_nodes = B_nodes.fillna('')
-        # Return graph and add network layer to Map object
-
-        # building_data = GeoData(geo_dataframe = B_edges,
-        #         style=polyline_style['style'],
-        #         hover_style=polyline_style['hover_style'],
-        #         name = layer_name)
-
-        # self.add_layer(building_data)
-
-        # if show:
-        #     display(self)
 
         print("--- %s seconds ---" % round(time.time() - start,3))
 
@@ -724,14 +761,20 @@ class Map(ipyleaflet.Map):
             return value
         
         # Population
+        large_countries = ['United States']
         groups = ['PopSum', 'Men', 'Women', 'Elderly','Youth','Children']
 
         if use_tif: 
             # Using .tif for computation
             src_list, rc_list = get_population_data(self.country, use_tif=use_tif)
 
-        if not use_tif:
-            pop_list, target_cols = get_population_data(self.country, use_tif=use_tif)
+        if not use_tif and self.country not in large_countries:
+            pop_list, target_cols = get_population_data(self.country, use_tif=use_tif, bounding_poly=self.polygon_bounds)
+            for i in range(len(pop_list)):
+                pop_list[i] = pop_list[i].to_crs(local_crs)
+
+        if not use_tif and self.country in large_countries:    
+            pop_list, target_cols = get_tiled_population_data(self.country, bounding_poly=self.polygon_bounds)
             for i in range(len(pop_list)):
                 pop_list[i] = pop_list[i].to_crs(local_crs)
 
@@ -856,29 +899,10 @@ class Map(ipyleaflet.Map):
             attr_stats[key]["Building Perimeter St.dev (m)"] = round(res_intersection.geometry.length.std(),2)
             attr_stats[key]["Mean Building Complexity"] = round(np.mean(res_intersection.geometry.length / np.sqrt(np.sqrt(res_intersection.geometry.area))),2)
             attr_stats[key]["Building Complexity St.dev"] = round(np.std(res_intersection.geometry.length / np.sqrt(np.sqrt(res_intersection.geometry.area))),2)
-            # # Add complexity Mean and Std.dev
-            # res_intersection['complexity'] = res_intersection['perimeter'] / np.sqrt(np.sqrt(res_intersection['area']))   
-            # compl_mean_series = res_intersection.groupby(['osmid'])['complexity'].mean()
-            # nodes['Complexity Mean'] = compl_mean_series
-            
-            # compl_std_series = res_intersection.groupby(['osmid'])['complexity'].std()
-            # nodes['Complexity Stdev'] = compl_std_series
 
-            #     # Add counts
-            # counts_series = res_intersection['osmid'].value_counts()
-            # nodes['Counts'] = counts_series
-            
-            # nodes['Footprint Proportion'] = nodes['Footprint Proportion'].replace(np.nan, 0).astype(float)
-            # nodes['Footprint Mean'] = nodes['Footprint Mean'].replace(np.nan, 0).astype(float)
-            # nodes['Footprint Stdev'] = nodes['Footprint Stdev'].replace(np.nan, 0).astype(float)
-            # nodes['Complexity Mean'] = nodes['Complexity Mean'].replace(np.nan, 0).astype(float)
-            # nodes['Complexity Stdev'] = nodes['Complexity Stdev'].replace(np.nan, 0).astype(float)
-            # nodes['Perimeter Total'] = nodes['Perimeter Total'].replace(np.nan, 0).astype(float)
-            # nodes['Perimeter Mean'] = nodes['Perimeter Mean'].replace(np.nan, 0).astype(float)
-            # nodes['Perimeter Stdev'] = nodes['Perimeter Stdev'].replace(np.nan, 0).astype(float)
-            # nodes['Counts'] = nodes['Counts'].replace(np.nan, 0).astype(int)
 
             # Add Population
+
             if use_tif:
                 for group, src, rc in zip(groups, src_list, rc_list):
                     stats = ['sum']
