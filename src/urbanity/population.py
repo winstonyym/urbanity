@@ -47,7 +47,9 @@ def get_population_data(country: str, use_tif = False, bounding_poly = None):
         for group in pop_groups:
             data_link = general_pop_dict[country][f'{group}_csv_url']
             pop_df = dd.read_csv(data_link, blocksize=None)
-            lat_name, lon_name, pop_name = list(pop_df.columns)
+            
+            lat_name, lon_name = list(pop_df.columns)[:2]
+            pop_name  = list(pop_df.columns)[-1]
 
             pop_df = pop_df.persist()
             pop_df = pop_df[(pop_df[lat_name] >= miny) & (pop_df[lat_name] <= maxy) & (pop_df[lon_name] >= minx) & (pop_df[lon_name] <= maxx)]
