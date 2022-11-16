@@ -698,7 +698,13 @@ class Map(ipyleaflet.Map):
             # Project and buffer original polygon
             proj_gdf = project_gdf(self.polygon_bounds.iloc[[i],:])
             proj_gdf_buffered = proj_gdf.buffer(bandwidth)
-            proj_gdf_buffered = gpd.GeoDataFrame(data=proj_gdf[column], crs = proj_gdf.crs, geometry = proj_gdf_buffered)
+
+            # Logical gate to check if column id is specified.
+            if column is None:
+                proj_gdf_buffered = gpd.GeoDataFrame(data=['Site'], crs = proj_gdf.crs, geometry = proj_gdf_buffered)
+            else: 
+                proj_gdf_buffered = gpd.GeoDataFrame(data=proj_gdf[column], crs = proj_gdf.crs, geometry = proj_gdf_buffered)
+            
             area = proj_gdf_buffered.geometry.area.values.item() / 1000000
             
             # Obtain pyrosm query object within spatial bounds
@@ -747,7 +753,8 @@ class Map(ipyleaflet.Map):
             nodes, edges = graph_to_gdf(G_buff_trunc_loop, nodes=True, edges=True)
             nodes = nodes.fillna('')
             
-            print(key)
+            print(f"Computing aggregate attributes for: {key}")
+            
             # Add geometric/metric attributes
             attr_stats[key]["No. of Nodes"] = len(nodes)
             attr_stats[key]["No. of Edges"] = len(edges)
@@ -782,7 +789,11 @@ class Map(ipyleaflet.Map):
                     pois = project_gdf(pois)
                     pois['geometry'] = pois.geometry.centroid
                     res_intersection = pois.overlay(proj_gdf_buffered, how='intersection')
-                    poi_series = res_intersection.groupby([column])['poi_col'].value_counts()
+                    
+                    if column is None:
+                        poi_series = res_intersection.groupby([0])['poi_col'].value_counts()
+                    else: 
+                        poi_series = res_intersection.groupby([column])['poi_col'].value_counts()
 
                     cols = ['Civic', 'Commercial', 'Entertainment', 'Food', 'Healthcare', 'Institutional', 'Recreational', 'Social']
                     for i in cols:
