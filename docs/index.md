@@ -9,7 +9,7 @@ changelog.md
 contributing.md
 conduct.md
 autoapi/index
-notebooks/examples/basic_functionality
-notebooks/examples/network_assortativity
-notebooks/examples/transductive_graph_ml
+notebooks/basic_functionality
+notebooks/network_assortativity
+notebooks/transductive_graph_ml
 ```

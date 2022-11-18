@@ -1,5 +1,4 @@
 # Map class utility functions
-from __future__ import annotations
 import os
 import json
 import pkg_resources

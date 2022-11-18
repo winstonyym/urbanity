@@ -15,9 +15,14 @@ author = u"winstonyym"
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
+
+nbsphinx_execute = 'never'
+
 extensions = [
     "myst_nb",
-    "autoapi.extension"
+    "autoapi.extension",
+    "sphinx.ext.napoleon",
+    "sphinx.ext.viewcode",
 ]
 autoapi_dirs = ["../src"]
 
