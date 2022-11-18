@@ -714,7 +714,6 @@ class Map(ipyleaflet.Map):
             osm = pyrosm.OSM(fp, bounding_box=buffered_bbox)
             nodes, edges = osm.get_network(network_type=network_type, nodes=True)
 
-
             # Build networkx graph for pre-processing
             G_buff = osm.to_graph(nodes, edges, graph_type="networkx", force_bidirectional=True, retain_all=True)
             

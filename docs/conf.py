@@ -18,6 +18,7 @@ author = u"winstonyym"
 extensions = [
     "myst_nb",
     "autoapi.extension",
+    "sphinx_gallery.load_style",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
 ]
