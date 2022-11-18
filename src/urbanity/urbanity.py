@@ -7,7 +7,6 @@ import math
 import warnings
 from unittest import skip
 import pkg_resources
-from typing import Optional, Union
 from webbrowser import get
 
 # import module functions and classes

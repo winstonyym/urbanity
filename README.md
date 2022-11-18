@@ -35,9 +35,10 @@ $ jupyter lab
 ```
 
 ## What can I do with Urbanity?
-We demonstrate how you can conduct a diverse range of urban analytical tasks (such as graph machine learning, network assortativity analysis, and benchmarking across cities) with Urbanity. Check out the usage examples/tutorials in the [examples](https://github.com/urbanity/urbanity-examples) repo.
+We demonstrate how you can conduct a diverse range of urban analytical tasks (such as graph machine learning, network assortativity analysis, and benchmarking across cities) with Urbanity. Check out the documentation and examples/tutorials in the documentation site [examples](https://urbanity.readthedocs.io/en/latest/). 
 
-Detailed documentation is available at [documentation](https://urbanity.readthedocs.io/).
+Sample dataset and notebooks to follow examples can be accessed at this [repository](https://github.com/winstonyym/urbanity_examples).
+
 ## License
 
 `urbanity` was created by winstonyym. It is licensed under the terms of the MIT license.
