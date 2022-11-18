@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import json
 import pkg_resources
-from typing import Optional
 from IPython.display import display
 from ipyleaflet import DrawControl
 
