@@ -17,9 +17,7 @@ author = u"winstonyym"
 # ones.
 extensions = [
     "myst_nb",
-    "autoapi.extension",
-    "sphinx.ext.napoleon",
-    "sphinx.ext.viewcode",
+    "autoapi.extension"
 ]
 autoapi_dirs = ["../src"]
 
