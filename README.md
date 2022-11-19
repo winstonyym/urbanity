@@ -1,9 +1,34 @@
 [![PyPI version](https://badge.fury.io/py/urbanity.svg)](https://badge.fury.io/py/urbanity)
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/urbanity)](https://badge.fury.io/py/urbanity)
 [![Documentation Status](https://img.shields.io/readthedocs/urbanity)](https://urbanity.readthedocs.io/)
+
+</br>
+</br>
+
+<p align="center">
+  <a href="https://ual.sg/">
+    <img src="images/ualsg.png" width = 70% alt="Logo">
+  </a>
+  <h3 align="center">Urbanity - Complex Urban Network Analysis</h3>
+</p>
+
+</br>
+</br>
+
 # Urbanity
 
 **Urbanity** is a network-based Python package to automate the construction of feature rich (contextual and semantic) urban networks at any geographical scale. Through an accessible and simple to use interface, users can request heterogeneous urban information such as street view imagery, building morphology, population (including sub-group), and points of interest for target areas of interest. 
+
+</br>
+</br>
+
+<p align="center">
+    <img src="images/citynetworks.png" width = 1000% alt="Logo">
+  <h5 align="center">Network of cities around the world</h5>
+</p>
+
+</br>
+</br>
 
 If you use Urbanity in your work, please cite:
 (*Urbanity is currently under review.*)
