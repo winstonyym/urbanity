@@ -6,6 +6,11 @@ import networkx as nx
 import geopandas as gpd
 import pandas as pd
 import numpy as np
+import math
+from shapely.geometry import box
+from shapely import wkt
+from geopandas import GeoDataFrame
+import mercantile, mapbox_vector_tile
 
 def project_gdf(gdf):
     """Utility function to project GeoDataFrames into local coordinates.
@@ -475,3 +480,123 @@ def fill_and_expand(gdf):
     gdf2 = gdf2.explode(index_parts=True)
     
     return gdf2
+
+def get_tile_geometry(gdf):
+    """Utility function to get tile geometries for area of interest.
+
+    Args:
+        gdf (gpd.GeoDataFrame): A geopandas dataframe object.
+
+    Returns:
+        gpd.GeoDataFrame: A geopandas dataframe object consisting of tile polygons.
+    """  
+    
+    bbox = list(gdf.geometry.bounds.values[0])
+    tiles = list(mercantile.tiles(bbox[0], bbox[1], bbox[2], bbox[3], 14))
+
+    tile_list = []
+    z_list = []
+    x_list = []
+    y_list = []
+    for tile in tiles:
+        tile_list.append(f'{tile.z}/{tile.x}/{tile.y}')
+        z_list.append(tile.z)
+        y_list.append(tile.y)
+        x_list.append(tile.x)
+
+    df = pd.DataFrame({'tile_id': tile_list, 'z': z_list, 'y': y_list, 'x': x_list})
+
+    def tile_bbox(zoom: int, x: int, y: int):
+        """Function to return bounding box shapely object
+
+        Args:
+            zoom (int): Tile zoom level.
+            x (int): Tile x coordinate.
+            y (int): Tile y coordindate.
+
+        Returns:
+            shapely.geometry.polygon.Polygon: Tile bounding box shape object.
+        """        
+        north = tile_lat(y, zoom)
+        south = tile_lat(y + 1, zoom)
+        west = tile_lon(x, zoom)
+        east = tile_lon(x + 1, zoom)
+        return box(west,south,east,north)
+
+
+    def tile_lon(x: int, z: int) -> float:
+        return x / math.pow(2.0, z) * 360.0 - 180
+
+
+    def tile_lat(y: int, z: int) -> float:
+        return math.degrees(
+            math.atan(math.sinh(math.pi - (2.0 * math.pi * y) / math.pow(2.0, z)))
+        )
+
+    geom = df.apply(lambda row: tile_bbox(row.z, row.x, row.y), axis=1)
+    tile_gdf = GeoDataFrame(data=df, geometry=geom)
+
+    return tile_gdf
+
+
+def replace_nan_with_tile(map_1, map_2, target, node_id):
+    if np.isnan(target):
+        try:
+            return map_1[map_2[node_id]]
+        except KeyError:
+            return 0
+    else:
+        return target
+    
+def dissolve_poly(filepath, name):
+    """Function to help dissolve administrative subzones into one multipolygon
+
+    Args:
+        filepath (str): Filepath to administrative subzone file.
+        name (str): Name to assign aggregated spatial boundary (e.g., Singapore).
+
+    Returns:
+        geopandas.GeoDataFrame: A aggregated dataframe object with merged subzones. 
+    """    
+    df = gpd.read_file(filepath)
+    df[name] = name
+    df = df.dissolve(name).reset_index()
+    return df
+
+# data = {'GID': list(bogota['COD_LOC'].unique()), 
+#         'geometry': [boundary_generator(bogota, 'COD_LOC', i) for i in list(bogota['COD_LOC'].unique())]
+#        }
+def merge_zones_by_group(gdf, column):
+    """Function to merge spatial dataframe according to a higher level of administrative grouping. 
+    For example, this function can merge neighbourhoods into districts. 
+
+    Args:
+        gdf (gpd.GeoDataFrame): A spatial dataframe object with administrative zoning at a higher granularity.
+        column (str): Specify column name to spatially merge administrative subzones groups.
+
+    Returns:
+        gpd.GeoDataFrame: Returns a spatial dataframe object with merged subzones. 
+    """    
+    unique_zones = list(gdf[column].unique())
+    
+    # Create empty city dataframe
+    city_subzone = pd.DataFrame({'GID':[], 'geometry':[]})
+    
+    # Define internal merging function
+    def merge_subzones(gdf, column, zone):
+        polygons = gdf[gdf[column] == zone]
+        geom = polygons['geometry'].unary_union.wkt
+        df = pd.DataFrame({'GID':[zone], 'geometry':geom})
+        df['geometry'] = df['geometry'].apply(lambda x: wkt.loads(x))
+        gdf = gpd.GeoDataFrame(data=df, crs = gdf.crs, geometry=df['geometry'])
+        return gdf
+    
+    # Iteratively add merged subzones
+    for zone in unique_zones:
+        merged = merge_subzones(gdf, column, zone)
+        city_subzone = pd.concat([city_subzone, merged], axis=0)
+        
+    # Convert to GeoDataFrame
+    city_subzone = gpd.GeoDataFrame(city_subzone, crs='epsg:4326', geometry = city_subzone['geometry'])
+    
+    return city_subzone

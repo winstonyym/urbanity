@@ -25,7 +25,7 @@ def compute_centrality(G, G_nodes, function, colname, *args):
     nk_centrality.run()
     value = [v for k,v in nk_centrality.ranking()[:]]
     G_nodes[colname] = value
-    
+    G_nodes[colname] = G_nodes[colname].round(3)
     return G_nodes
 
 
@@ -51,7 +51,7 @@ def merge_nx_attr(G, G_nodes, nxfunction, colname, **kwargs):
         attr_dict = nxfunction(G2, **kwargs)
     
     G_nodes[colname] = list(attr_dict.values())
-
+    G_nodes[colname] = G_nodes[colname].round(3)
     return G_nodes
 
 
@@ -68,5 +68,6 @@ def merge_nx_property(G_nodes, nxproperty, colname, *args):
     """    
     attr_dict = dict(nxproperty)
     G_nodes[colname] = list(attr_dict.values())
+    G_nodes[colname] = G_nodes[colname].round(3)
 
     return G_nodes
