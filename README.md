@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://ual.sg/">
-    <img src="images/ualsg.jpeg" width = 40% alt="Logo">
+    <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/ualsg.jpeg" width = 40% alt="Logo">
   </a>
   <h3 align="center">Urbanity - Complex Urban Network Analysis</h3>
 </p>
@@ -23,7 +23,7 @@
 </br>
 
 <p align="center">
-    <img src="images/citynetworks.png" width = 1000% alt="Logo">
+    <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/citynetworks.png" width = 1000% alt="Logo">
   <h5 align="center">Network of cities around the world</h5>
 </p>
 
