@@ -4,6 +4,7 @@ import os
 import json
 import time
 import math
+import glob
 import warnings
 from unittest import skip
 import pkg_resources
@@ -227,10 +228,10 @@ class Map(ipyleaflet.Map):
             try:
                 fp = get_data(location, directory = self.directory)
                 print('Creating data folder and downloading osm street data...')
-            except KeyError:
+            except ValueError:
                 fp = get_data(self.country, directory = self.directory)
-                print(f"KeyError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
-            except KeyError:
+                print(f"ValueError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+            except ValueError:
                 raise ValueError('No osm data found for specified location.')
 
             print('Data extracted successfully. Proceeding to construct street network.')
@@ -485,12 +486,14 @@ class Map(ipyleaflet.Map):
 
             # If pop_attr is True, compute and add population attributes.
             if pop_attr:
-                tiled_country = ['United States', 'Spain']
+                tile_countries_path = pkg_resources.resource_filename('urbanity', "map_data/*")
+                tiled_country = [os.path.basename(country)[:-8] for country in glob.glob(tile_countries_path) if '.geojson' in country]
                 groups = ['PopSum', 'Men', 'Women', 'Elderly','Youth','Children']
-
+                mod_country = self.country.replace(" ", "_")
                 # Use csv for small countries
-                if self.country not in tiled_country:
-                    pop_list, target_cols = get_population_data(self.country, 
+                if mod_country not in tiled_country:
+                    print('Using non-tiled population data.')
+                    pop_list, target_cols = get_population_data(mod_country, 
                                                                 bounding_poly=self.polygon_bounds)
                     
                     for i, data in enumerate(zip(pop_list, target_cols)):
@@ -513,8 +516,9 @@ class Map(ipyleaflet.Map):
                                 edges[name] = edges[name].replace(np.nan, 0).astype(int)
             
                 # If big country, use csv and custom tiled population data: (e.g. USA: https://figshare.com/articles/dataset/USA_TILE_POPULATION/21502296)
-                elif self.country in tiled_country:
-                    pop_list, target_cols = get_tiled_population_data(self.country, bounding_poly = self.polygon_bounds)
+                elif mod_country in tiled_country:
+                    print('Using tiled population data.')
+                    pop_list, target_cols = get_tiled_population_data(mod_country, bounding_poly = self.polygon_bounds)
                    
                     for i, data in enumerate(zip(pop_list, target_cols)):
                         proj_data = data[0].to_crs(nodes_buffer.crs)
@@ -563,7 +567,7 @@ class Map(ipyleaflet.Map):
                     return value
                 
                 pois['poi_col'] = pois.apply(lambda row: poi_col(row['amenity'], row['shop'], row['tourism'], row['leisure']), axis=1)
-                pois = pois[['id', 'osm_type','lon','lat','name','poi_col','geometry']]
+                pois = pois[['id', 'osm_type','lon','lat','poi_col','geometry']]
 
                 # Remove amenities that have counts of less than n=5
                 pois = finetune_poi(pois, 'poi_col', poi_filter['replace_dict'], n=5)
@@ -798,10 +802,10 @@ class Map(ipyleaflet.Map):
             try:
                 fp = get_data(location, directory = self.directory)
                 print('Creating data folder and downloading osm street data...')
-            except KeyError:
+            except ValueError:
                 fp = get_data(self.country, directory = self.directory)
                 print(f"KeyError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
-            except KeyError:
+            except ValueError:
                 raise ValueError('No osm data found for specified location.')
 
             print('Data extracted successfully. Proceeding to construct street network.')
@@ -845,16 +849,18 @@ class Map(ipyleaflet.Map):
             return value
         
         # Population
-        tiled_country = ['United States', 'Spain']
+        tile_countries_path = pkg_resources.resource_filename('urbanity', "map_data/*")
+        tiled_country = [os.path.basename(country)[:-8] for country in glob.glob(tile_countries_path) if '.geojson' in country]
         groups = ['PopSum', 'Men', 'Women', 'Elderly','Youth','Children']
+        mod_country = self.country.replace(" ", "_")
 
-        if self.country not in tiled_country:
-            pop_list, target_cols = get_population_data(self.country, bounding_poly=self.polygon_bounds)
+        if mod_country not in tiled_country:
+            pop_list, target_cols = get_population_data(mod_country, bounding_poly=self.polygon_bounds)
             for i in range(len(pop_list)):
                 pop_list[i] = pop_list[i].to_crs(local_crs)
 
-        if self.country in tiled_country:    
-            pop_list, target_cols = get_tiled_population_data(self.country, bounding_poly=self.polygon_bounds)
+        if mod_country in tiled_country:    
+            pop_list, target_cols = get_tiled_population_data(mod_country, bounding_poly=self.polygon_bounds)
             for i in range(len(pop_list)):
                 pop_list[i] = pop_list[i].to_crs(local_crs)
         
@@ -954,7 +960,11 @@ class Map(ipyleaflet.Map):
                         pois[i] = ''
 
                 pois['poi_col'] = pois.apply(lambda row: poi_col(row['amenity'], row['shop'], row['tourism'], row['leisure']), axis=1)
-                pois = pois[['id', 'osm_type','lon','lat','name','poi_col','geometry']]
+                pois['geometry'] = pois.geometry.centroid
+                pois['lon'] = pois.geometry.x
+                pois['lat'] = pois.geometry.y
+                
+                pois = pois[['id', 'osm_type','lon','lat','poi_col','geometry']]
                 pois = finetune_poi(pois, 'poi_col', poi_filter['replace_dict'], n=2)
                 
             
