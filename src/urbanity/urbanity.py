@@ -630,8 +630,10 @@ class Map(ipyleaflet.Map):
                 tile_gdf = tile_gdf.set_crs(self.polygon_bounds.crs)
                 proj_tile_gdf = project_gdf(tile_gdf)
 
-                svi_path = pkg_resources.resource_filename('urbanity', f"svi_data/{location}.geojson")
-                svi_data = gpd.read_file(svi_path)
+                svi_path = pkg_resources.resource_filename('urbanity', f"svi_data/{svi_data}.json")
+                with open(svi_path, 'r') as f:
+                    svi_dict = json.load(f)
+                svi_data = gpd.read_file(svi_dict[f'{location}.geojson'])
                 svi_data = project_gdf(svi_data)
 
                 # Associate each node with respective tile_id and create mapping dictionary
@@ -865,8 +867,10 @@ class Map(ipyleaflet.Map):
                 pop_list[i] = pop_list[i].to_crs(local_crs)
         
         if get_svi:
-            svi_path = pkg_resources.resource_filename('urbanity', f"svi_data/{location}.geojson")
-            svi_data = gpd.read_file(svi_path)
+            svi_path = pkg_resources.resource_filename('urbanity', f"svi_data/{svi_data}.json")
+            with open(svi_path, 'r') as f:
+                svi_dict = json.load(f)
+            svi_data = gpd.read_file(svi_dict[f'{location}.geojson'])
             svi_data = project_gdf(svi_data)
 
         # Get individual polygon data
