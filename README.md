@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://ual.sg/">
-    <img src="images/ualsg.png" width = 40% alt="Logo">
+    <img src="images/ualsg.jpeg" width = 40% alt="Logo">
   </a>
   <h3 align="center">Urbanity - Complex Urban Network Analysis</h3>
 </p>
