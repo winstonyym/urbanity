@@ -17,7 +17,6 @@ author = u"winstonyym"
 # ones.
 
 nbsphinx_execute = 'never'
-nbsphinx_kernel_name = 'urbanity'
 
 extensions = [
     "myst_nb",
