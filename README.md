@@ -45,7 +45,7 @@ Urbanity is built on several geospatial packages (e.g., GeoPandas, ipyleaflet, r
 2) Download environment.yml file and place it at the location of choice (Step 1).
 3) Open up a terminal/command prompt and input the following command:
 
-```Terminal
+```
 $ conda env create -f environment.yml
 $ conda activate urbanity
 ```
@@ -54,7 +54,7 @@ $ conda activate urbanity
 
 (Optional) For JupyterLab / JupyterNotebook users, you can additionally add a notebook kernel via:
 
-```Terminal
+```
 $ python -m ipykernel install --user --name=urbanity
 $ jupyter lab
 ```

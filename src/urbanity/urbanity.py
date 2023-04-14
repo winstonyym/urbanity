@@ -486,14 +486,16 @@ class Map(ipyleaflet.Map):
 
             # If pop_attr is True, compute and add population attributes.
             if pop_attr:
-                tile_countries_path = pkg_resources.resource_filename('urbanity', "map_data/*")
-                tiled_country = [os.path.basename(country)[:-8] for country in glob.glob(tile_countries_path) if '.geojson' in country]
+                tile_countries_path = pkg_resources.resource_filename('urbanity', "map_data/tiled_data.json")
+                with open(tile_countries_path, 'r') as f:
+                    tile_dict = json.load(f)
+                    
+                tiled_country = [country[:-13] for country in list(tile_dict.keys())]
                 groups = ['PopSum', 'Men', 'Women', 'Elderly','Youth','Children']
-                mod_country = self.country.replace(" ", "_")
                 # Use csv for small countries
-                if mod_country not in tiled_country:
+                if self.country not in tiled_country:
                     print('Using non-tiled population data.')
-                    pop_list, target_cols = get_population_data(mod_country, 
+                    pop_list, target_cols = get_population_data(self.country, 
                                                                 bounding_poly=self.polygon_bounds)
                     
                     for i, data in enumerate(zip(pop_list, target_cols)):
@@ -516,9 +518,9 @@ class Map(ipyleaflet.Map):
                                 edges[name] = edges[name].replace(np.nan, 0).astype(int)
             
                 # If big country, use csv and custom tiled population data: (e.g. USA: https://figshare.com/articles/dataset/USA_TILE_POPULATION/21502296)
-                elif mod_country in tiled_country:
+                elif self.country in tiled_country:
                     print('Using tiled population data.')
-                    pop_list, target_cols = get_tiled_population_data(mod_country, bounding_poly = self.polygon_bounds)
+                    pop_list, target_cols = get_tiled_population_data(self.country, bounding_poly = self.polygon_bounds)
                    
                     for i, data in enumerate(zip(pop_list, target_cols)):
                         proj_data = data[0].to_crs(nodes_buffer.crs)
@@ -630,7 +632,7 @@ class Map(ipyleaflet.Map):
                 tile_gdf = tile_gdf.set_crs(self.polygon_bounds.crs)
                 proj_tile_gdf = project_gdf(tile_gdf)
 
-                svi_path = pkg_resources.resource_filename('urbanity', f"svi_data/{svi_data}.json")
+                svi_path = pkg_resources.resource_filename('urbanity', 'svi_data/svi_data.json')
                 with open(svi_path, 'r') as f:
                     svi_dict = json.load(f)
                 svi_data = gpd.read_file(svi_dict[f'{location}.geojson'])
@@ -851,23 +853,25 @@ class Map(ipyleaflet.Map):
             return value
         
         # Population
-        tile_countries_path = pkg_resources.resource_filename('urbanity', "map_data/*")
-        tiled_country = [os.path.basename(country)[:-8] for country in glob.glob(tile_countries_path) if '.geojson' in country]
+        tile_countries_path = pkg_resources.resource_filename('urbanity', "map_data/tiled_data.json")
+        with open(tile_countries_path, 'r') as f:
+            tile_dict = json.load(f)
+            
+        tiled_country = [country[:-13] for country in list(tile_dict.keys())]
         groups = ['PopSum', 'Men', 'Women', 'Elderly','Youth','Children']
-        mod_country = self.country.replace(" ", "_")
 
-        if mod_country not in tiled_country:
-            pop_list, target_cols = get_population_data(mod_country, bounding_poly=self.polygon_bounds)
+        if self.country not in tiled_country:
+            pop_list, target_cols = get_population_data(self.country, bounding_poly=self.polygon_bounds)
             for i in range(len(pop_list)):
                 pop_list[i] = pop_list[i].to_crs(local_crs)
 
-        if mod_country in tiled_country:    
-            pop_list, target_cols = get_tiled_population_data(mod_country, bounding_poly=self.polygon_bounds)
+        if self.country in tiled_country:    
+            pop_list, target_cols = get_tiled_population_data(self.country, bounding_poly=self.polygon_bounds)
             for i in range(len(pop_list)):
                 pop_list[i] = pop_list[i].to_crs(local_crs)
         
         if get_svi:
-            svi_path = pkg_resources.resource_filename('urbanity', f"svi_data/{svi_data}.json")
+            svi_path = pkg_resources.resource_filename('urbanity', 'svi_data/svi_data.json')
             with open(svi_path, 'r') as f:
                 svi_dict = json.load(f)
             svi_data = gpd.read_file(svi_dict[f'{location}.geojson'])

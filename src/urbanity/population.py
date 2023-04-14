@@ -1,4 +1,5 @@
 # import base packages
+import json
 import zipfile
 import requests
 from io import BytesIO
@@ -76,9 +77,12 @@ def get_tiled_population_data(country: str, bounding_poly = None):
 
     general_pop_dict = get_population_data_links(country)
     minx, miny, maxx, maxy = bounding_poly.bounds['minx'].min(), bounding_poly.bounds['miny'].min(), bounding_poly.bounds['maxx'].max(), bounding_poly.bounds['maxy'].max()
-    country_mod = country.replace(' ', '')
-    tile_polygon_path = pkg_resources.resource_filename('urbanity', f"map_data/{country_mod}.geojson")
-    tile_polygons = gpd.read_file(tile_polygon_path)
+
+    tile_polygon_path = pkg_resources.resource_filename('urbanity', 'map_data/tiled_data.json')
+    with open(tile_polygon_path, 'r') as f:
+        tile_dict = json.load(f)
+
+    tile_polygons = gpd.read_file(tile_dict[f'{country}_tile.geojson'])
     res_intersection = bounding_poly.overlay(tile_polygons, how='intersection')
     target_tiles = list(np.unique(res_intersection['TILEID']))
 
