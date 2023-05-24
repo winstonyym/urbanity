@@ -567,8 +567,9 @@ class Map(ipyleaflet.Map):
                         value = 'commercial'
                     
                     return value
-                
+            
                 pois['poi_col'] = pois.apply(lambda row: poi_col(row['amenity'], row['shop'], row['tourism'], row['leisure']), axis=1)
+                
                 pois = pois[['id', 'osm_type','lon','lat','poi_col','geometry']]
 
                 # Remove amenities that have counts of less than n=5
@@ -635,7 +636,8 @@ class Map(ipyleaflet.Map):
                 svi_path = pkg_resources.resource_filename('urbanity', 'svi_data/svi_data.json')
                 with open(svi_path, 'r') as f:
                     svi_dict = json.load(f)
-                svi_data = gpd.read_file(svi_dict[f'{location}.geojson'])
+                svi_location = location.replace(' ', '')
+                svi_data = gpd.read_file(svi_dict[f'{svi_location}.geojson'])
                 svi_data = project_gdf(svi_data)
 
                 # Associate each node with respective tile_id and create mapping dictionary
@@ -874,7 +876,8 @@ class Map(ipyleaflet.Map):
             svi_path = pkg_resources.resource_filename('urbanity', 'svi_data/svi_data.json')
             with open(svi_path, 'r') as f:
                 svi_dict = json.load(f)
-            svi_data = gpd.read_file(svi_dict[f'{location}.geojson'])
+            svi_location = location.replace(' ', '')
+            svi_data = gpd.read_file(svi_dict[f'{svi_location}.geojson'])
             svi_data = project_gdf(svi_data)
 
         # Get individual polygon data

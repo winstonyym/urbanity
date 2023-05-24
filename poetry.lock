@@ -257,7 +257,7 @@ python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,>=2.7
 
 [[package]]
 name = "coverage"
-version = "7.2.3"
+version = "7.2.6"
 description = "Code coverage measurement for Python"
 category = "dev"
 optional = false
@@ -1470,7 +1470,7 @@ test = ["pytest (>=6,!=7.0.0,!=7.0.1)", "pytest-cov (>=3.0.0)", "pytest-qt"]
 
 [[package]]
 name = "rasterio"
-version = "1.3.2"
+version = "1.3.7"
 description = "Fast and direct raster I/O for use with Numpy and SciPy"
 category = "main"
 optional = false
@@ -1487,12 +1487,12 @@ numpy = ">=1.18"
 snuggs = ">=1.4.1"
 
 [package.extras]
-test = ["shapely", "pytest (>=2.8.2)", "pytest-cov (>=2.2.0)", "packaging", "hypothesis", "boto3 (>=1.2.4)"]
-s3 = ["boto3 (>=1.2.4)"]
-plot = ["matplotlib"]
+all = ["packaging", "ipython (>=2.0)", "sphinx", "matplotlib", "sphinx-rtd-theme", "ghp-import", "numpydoc", "shapely", "hypothesis", "pytest-cov (>=2.2.0)", "pytest (>=2.8.2)", "boto3 (>=1.2.4)"]
+docs = ["ghp-import", "numpydoc", "sphinx", "sphinx-rtd-theme"]
 ipython = ["ipython (>=2.0)"]
-docs = ["sphinx-rtd-theme", "sphinx", "numpydoc", "ghp-import"]
-all = ["shapely", "pytest (>=2.8.2)", "sphinx-rtd-theme", "pytest-cov (>=2.2.0)", "ipython (>=2.0)", "hypothesis", "boto3 (>=1.2.4)", "numpydoc", "sphinx", "ghp-import", "matplotlib", "packaging"]
+plot = ["matplotlib"]
+s3 = ["boto3 (>=1.2.4)"]
+test = ["boto3 (>=1.2.4)", "hypothesis", "packaging", "pytest-cov (>=2.2.0)", "pytest (>=2.8.2)", "shapely"]
 
 [[package]]
 name = "rasterstats"
@@ -2005,7 +2005,7 @@ testing = ["pytest (>=6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "flake8 
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.9"
-content-hash = "8f4b579e583c0bbfa53f05a3caab2d0bfafed8659f1cc50c9f0811541b3c2da8"
+content-hash = "a2e02f04c9d90078f1a36082f7b543a2c70fb445745b07e20cb3e9e002ce2cdd"
 
 [metadata.files]
 affine = []

@@ -8,9 +8,6 @@ dependencies:
   - ipyleaflet
   - pyrosm
   - networkit
-  - dask
-  - aiohttp
-  - pyarrow
   - pip:
     - urbanity==0.3.9
 prefix: /Users/winston/miniconda3/envs/urbanity

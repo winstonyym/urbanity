@@ -3,11 +3,8 @@ import json
 import zipfile
 import requests
 from io import BytesIO
-import rasterio
-from rasterio.io import MemoryFile
 import pandas as pd
 import geopandas as gpd
-import dask.dataframe as dd
 import numpy as np
 import pkg_resources
 
