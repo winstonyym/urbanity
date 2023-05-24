@@ -27,7 +27,6 @@ import ipyleaflet
 from ipyleaflet import basemaps, basemap_to_tiles, Icon, Marker, LayersControl, LayerGroup, DrawControl, FullScreenControl, ScaleControl, LocalTileLayer, GeoData
 import pyrosm
 from pyrosm import get_data
-import rasterstats
 import networkit
 
 # Catch known warnings from shapely and geopandas
