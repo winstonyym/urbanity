@@ -826,6 +826,21 @@ optional = false
 python-versions = ">=3.7"
 
 [[package]]
+name = "mercantile"
+version = "1.2.1"
+description = "Web mercator XYZ tile utilities"
+category = "main"
+optional = false
+python-versions = "*"
+
+[package.dependencies]
+click = ">=3.0"
+
+[package.extras]
+dev = ["check-manifest"]
+test = ["hypothesis", "pytest"]
+
+[[package]]
 name = "mistune"
 version = "2.0.4"
 description = "A sane Markdown parser with useful plugins and renderers"
@@ -2005,7 +2020,7 @@ testing = ["pytest (>=6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "flake8 
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.9"
-content-hash = "a2e02f04c9d90078f1a36082f7b543a2c70fb445745b07e20cb3e9e002ce2cdd"
+content-hash = "ebcdb026ad6e70025d2f9e5baca60766480e0c00a667802e8869dd23aa6f6cdc"
 
 [metadata.files]
 affine = []
@@ -2266,6 +2281,7 @@ markupsafe = [
 matplotlib-inline = []
 mdit-py-plugins = []
 mdurl = []
+mercantile = []
 mistune = []
 munch = []
 myst-nb = []

@@ -10,7 +10,7 @@ import math
 from shapely.geometry import box
 from shapely import wkt
 from geopandas import GeoDataFrame
-import mercantile, mapbox_vector_tile
+import mercantile
 
 def project_gdf(gdf):
     """Utility function to project GeoDataFrames into local coordinates.
