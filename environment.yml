@@ -3,11 +3,12 @@ channels:
   - conda-forge
   - defaults
 dependencies:
+  - python==3.9
   - geopandas
   - ipykernel
   - ipyleaflet
-  - pyrosm
-  - networkit
+  - ipywidgets==8.0.2
   - pip:
     - urbanity==0.3.11
+
 prefix: /Users/winston/miniconda3/envs/urbanity
