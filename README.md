@@ -7,10 +7,17 @@
 
 <p align="center">
   <a href="https://ual.sg/">
-    <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/ualsg.jpeg" width = 40% alt="Logo">
+    <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/urbanity_black_transparent.png#gh-light-mode-only" width = 40% alt="Logo">
   </a>
-  <h3 align="center">Urbanity - Complex Urban Network Analysis</h3>
 </p>
+
+<p align="center">
+  <a href="https://ual.sg/">
+    <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/urbanity_white_transparent.png#gh-light-mode-only" width = 40% alt="Logo">
+  </a>
+</p>
+
+--------------------------------------------------------------------------------
 
 </br>
 </br>
@@ -67,3 +74,9 @@ Sample dataset and notebooks to follow examples can be accessed at this [reposit
 ## License
 
 `urbanity` was created by winstonyym. It is licensed under the terms of the MIT license.
+
+
+## Credits 
+
+Logo design: [April Zhu](https://ual.sg/authors/april/)
+Colab notebooks: [Kunihiko Fujiwara](https://ual.sg/authors/kunihiko/)
