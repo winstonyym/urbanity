@@ -5,17 +5,9 @@
 </br>
 </br>
 
-<p align="center">
-  <a href="https://ual.sg/">
-    <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/urbanity_black_transparent.png#gh-light-mode-only" width = 40% alt="Logo">
-  </a>
-</p>
+![Urbanity Logo](https://raw.githubusercontent.com/winstonyym/urbanity/main/images/urbanity_black_transparent.png#gh-light-mode-only)
+![Urbanity Logo](https://raw.githubusercontent.com/winstonyym/urbanity/main/images/urbanity_white_tranparent.png#gh-dark-mode-only)
 
-<p align="center">
-  <a href="https://ual.sg/">
-    <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/urbanity_white_transparent.png#gh-light-mode-only" width = 40% alt="Logo">
-  </a>
-</p>
 
 --------------------------------------------------------------------------------
 
@@ -39,10 +31,16 @@
 
 If you use Urbanity in your work, please cite:
 (*Urbanity is currently under review.*)
+
+</br>
+
 ## Designed for urban planners
 Urbanity is designed in an object-oriented approach that parallels the urban planning process. The urban data science pipeline starts with a base map which users can use to explore their site. Subsequently, there are two ways to specify geographical area of interest: 1) drawing with the polygon and box tools provided; or 2) providing your own polygon shapefiles (all common formats .shp/.geojson are supported). 
 
 Towards exploring complexities underlying urban systems and facilitating comparative study between cities, Urbanity is developed to facilitate downstream descriptive, modelling, and predictive urban analytical tasks.
+
+</br>
+
 ## Quickstart
 *How do I install Urbanity?*
 
@@ -66,17 +64,35 @@ $ python -m ipykernel install --user --name=urbanity
 $ jupyter lab
 ```
 
+</br>
+
 ## What can I do with Urbanity?
 We demonstrate how you can conduct a diverse range of urban analytical tasks (such as graph machine learning, network assortativity analysis, and benchmarking across cities) with Urbanity. Check out the documentation and examples/tutorials in the documentation site [examples](https://urbanity.readthedocs.io/en/latest/). 
 
 Sample dataset and notebooks to follow examples can be accessed at this [repository](https://github.com/winstonyym/urbanity_examples).
 
+</br>
+
 ## License
 
 `urbanity` was created by winstonyym. It is licensed under the terms of the MIT license.
 
+</br>
 
 ## Credits 
 
 Logo design: [April Zhu](https://ual.sg/authors/april/)
 Colab notebooks: [Kunihiko Fujiwara](https://ual.sg/authors/kunihiko/)
+
+</br>
+</br>
+
+--------------------------------------------------------------------------------
+
+</br>
+</br>
+<p align="center">
+  <a href="https://ual.sg/">
+    <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/ualsg.jpeg" width = 50% alt="Logo">
+  </a>
+</p>
