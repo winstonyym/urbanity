@@ -12,13 +12,11 @@
 --------------------------------------------------------------------------------
 
 </br>
-</br>
 
 # Urbanity
 
 **Urbanity** is a network-based Python package to automate the construction of feature rich (contextual and semantic) urban networks at any geographical scale. Through an accessible and simple to use interface, users can request heterogeneous urban information such as street view imagery, building morphology, population (including sub-group), and points of interest for target areas of interest. 
 
-</br>
 </br>
 
 <p align="center">
@@ -81,10 +79,9 @@ Sample dataset and notebooks to follow examples can be accessed at this [reposit
 
 ## Credits 
 
-Logo design: [April Zhu](https://ual.sg/authors/april/)
-Colab notebooks: [Kunihiko Fujiwara](https://ual.sg/authors/kunihiko/)
+- Logo design: [April Zhu](https://ual.sg/authors/april/)
+- Colab notebooks: [Kunihiko Fujiwara](https://ual.sg/authors/kunihiko/)
 
-</br>
 </br>
 
 --------------------------------------------------------------------------------
