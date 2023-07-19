@@ -183,6 +183,74 @@ class Map(ipyleaflet.Map):
         else:
             print('No polygon layer found on map.')
 
+    def check_osm_buildings(self,
+                            location: str,
+                            column: str = "index") -> gpd.GeoDataFrame:
+        """Function to check the attribute completeness for OSM buildings as implemented in: https://ual.sg/publication/2020-3-dgeoinfo-3-d-asean/
+
+        Args:
+            location (str): Accepts city name or country name to obtain OpenStreetMap data.
+            column (str): Accepts name of column with zone ID or name or defaults to use index.
+
+        Returns:
+            gpd.DataFrame: A geopandas dataframe with attribute completeness for OSM buildings
+        """
+
+        # First step - Check if bounding box is defined
+        try:
+            original_bbox = self.polygon_bounds.iloc[[0]].geometry[0]
+            # catch when it hasn't even been defined 
+        except (AttributeError, NameError):
+            raise Exception('Please delimit a bounding box.')
+        
+        # Obtain filepath to OSM data
+        try:
+            fp = get_data(location, directory = self.directory)
+            print(f'Getting osm building data for {location}')
+        except ValueError:
+            fp = get_data(self.country, directory = self.directory)
+            print(f'ValueError: No pre-downloaded osm data available for {location}, will instead try for {self.country}.')
+        
+        # Create dictionary keys based on column elements
+        attr_stats = {}
+        if column == 'index':
+            print('No column name specified, using index as column name.')
+            for name in self.polygon_bounds.index:
+                attr_stats[name] = {}
+        else:
+            for name in self.polygon_bounds[column]:
+                attr_stats[name] = {}
+
+        # Get individual polygon data
+        for i, key in enumerate(attr_stats):
+            print(f"Checking building data for: {key}")
+            # Set bounding box
+            original_bbox = self.polygon_bounds.iloc[[i]].geometry[i]
+            
+            # Get OSM parser
+            osm = pyrosm.OSM(fp, bounding_box=original_bbox)
+
+            # Retrieve buildings
+            buildings = osm.get_buildings()
+            num_buildings = len(buildings)
+            attr_stats[key]['No. of Buildings'] = num_buildings
+
+            # Compute attributes
+            num_height = len(buildings[~buildings['height'].isna()]) if ('height' in buildings.columns) else 0
+            perc_num_height = round(num_height/num_buildings*100,2) if ('height' in buildings.columns) else 0
+            attr_stats[key]['No. w/ Height'] = num_height
+            attr_stats[key]['Perc w/ Height'] = perc_num_height
+
+            num_levels = len(buildings[~buildings['building:levels'].isna()]) if ('building:levels' in buildings.columns) else 0
+            perc_num_levels = round(num_levels/num_buildings*100,2) if ('building:levels' in buildings.columns) else 0
+            attr_stats[key]['No. w/ Levels'] = num_levels
+            attr_stats[key]['Perc w/ Levels'] = perc_num_levels
+
+        df = pd.DataFrame(attr_stats).transpose()
+        gdf = gpd.GeoDataFrame(data=df, crs=self.polygon_bounds.crs, geometry = self.polygon_bounds['geometry'])
+        return gdf
+
+
     def get_street_network(
             self, 
             location: str,

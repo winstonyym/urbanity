@@ -29,9 +29,18 @@
 </br>
 
 If you use Urbanity in your work, please cite:
-(*Urbanity is currently under review.*)
+<br></br>
+(*Urbanity has been accepted in npj Urban Sustainability. We will provide citation details soon!*)
 
 </br>
+
+## Features
+- Rapid City-scale Network Construction
+- Automated Computation of Metric, Topological, Contextual, and Semantic Urban Indicators
+- Node and Edge Spatial Computation
+- Areal Statistics for Urban Subzones
+- Validity Check for OSM Building Attribute Completeness
+- Primal Planar, Dual, and Spatial Graph Generation
 
 ## Designed for urban planners
 Urbanity is designed in an object-oriented approach that parallels the urban planning process. The urban data science pipeline starts with a base map which users can use to explore their site. Subsequently, there are two ways to specify geographical area of interest: 1) drawing with the polygon and box tools provided; or 2) providing your own polygon shapefiles (all common formats .shp/.geojson are supported). 
@@ -82,7 +91,11 @@ Sample dataset and notebooks to follow examples can be accessed at this [reposit
 
 - Logo design: [April Zhu](https://ual.sg/authors/april/)
 - Colab notebooks: [Kunihiko Fujiwara](https://ual.sg/authors/kunihiko/)
-
+- OSMnx [Github](https://github.com/gboeing/osmnx)
+- Geopandas [Github](https://github.com/geopandas/geopandas)
+- Pyrosm [Github](https://github.com/HTenkanen/pyrosm)
+- NetworkX [Github](https://github.com/networkx/networkx)
+- ipyleaflet [Github](https://github.com/jupyter-widgets/ipyleaflet)
 </br>
 
 --------------------------------------------------------------------------------
