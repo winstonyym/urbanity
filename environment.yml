@@ -9,6 +9,6 @@ dependencies:
   - ipyleaflet
   - ipywidgets==8.0.2
   - pip:
-    - urbanity==0.3.11
+    - urbanity==0.3.12
 
 prefix: /Users/winston/miniconda3/envs/urbanity

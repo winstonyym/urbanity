@@ -16,7 +16,7 @@
 
 # Urbanity
 
-**Urbanity** is a network-based Python package to automate the construction of feature rich (contextual and semantic) urban networks at any geographical scale. Through an accessible and simple to use interface, users can request heterogeneous urban information such as street view imagery, building morphology, population (including sub-group), and points of interest for target areas of interest. 
+**Urbanity** is a network-based Python package developed at the [NUS Urban Analytics Lab](https://ual.sg/data-code/) to automate the construction of feature rich (contextual and semantic) urban networks at any geographical scale. Through an accessible and simple to use interface, users can request heterogeneous urban information such as street view imagery, building morphology, population (including sub-group), and points of interest for target areas of interest. 
 
 </br>
 
@@ -25,29 +25,19 @@
   <h5 align="center">Network of cities around the world</h5>
 </p>
 
-</br>
-</br>
-
-If you use Urbanity in your work, please cite:
-<br></br>
-(*Urbanity has been accepted in npj Urban Sustainability. We will provide citation details soon!*)
-
-</br>
-
 ## Features
-- Rapid City-scale Network Construction
-- Automated Computation of Metric, Topological, Contextual, and Semantic Urban Indicators
-- Node and Edge Spatial Computation
-- Areal Statistics for Urban Subzones
-- Validity Check for OSM Building Attribute Completeness
-- Primal Planar, Dual, and Spatial Graph Generation
+- Rapid city-scale network generation
+- Seamless computation of metric, topological, contextual, and semantic network indicators
+- Node and edge spatial context computation
+- Areal statistics for arbitrary urban subzones
+- Validity checks for OpenStreetMap attribute completeness (no. of buildings, percentage with height, percentage with levels, etc.)
+- Primal planar, dual, and spatial graph generation
 
 ## Designed for urban planners
 Urbanity is designed in an object-oriented approach that parallels the urban planning process. The urban data science pipeline starts with a base map which users can use to explore their site. Subsequently, there are two ways to specify geographical area of interest: 1) drawing with the polygon and box tools provided; or 2) providing your own polygon shapefiles (all common formats .shp/.geojson are supported). 
 
 Towards exploring complexities underlying urban systems and facilitating comparative study between cities, Urbanity is developed to facilitate downstream descriptive, modelling, and predictive urban analytical tasks.
 
-</br>
 
 ## Quickstart
 *How do I install Urbanity?*
@@ -72,20 +62,21 @@ $ python -m ipykernel install --user --name=urbanity
 $ jupyter lab
 ```
 
-</br>
 
 ## What can I do with Urbanity?
 We demonstrate how you can conduct a diverse range of urban analytical tasks (such as graph machine learning, network assortativity analysis, and benchmarking across cities) with Urbanity. Check out the documentation and examples/tutorials in the documentation site [examples](https://urbanity.readthedocs.io/en/latest/). 
 
 Sample dataset and notebooks to follow examples can be accessed at this [repository](https://github.com/winstonyym/urbanity_examples).
 
-</br>
 
+## Citation
+If you use Urbanity in your work, please cite:
+<br></br>
+Yap, W., Stouffs, R. & Biljecki, F. Urbanity: automated modelling and analysis of multidimensional networks in cities. npj Urban Sustain 3, 45 (2023). https://doi.org/10.1038/s42949-023-00125-w
 ## License
 
 `urbanity` was created by winstonyym. It is licensed under the terms of the MIT license.
 
-</br>
 
 ## Credits 
 
@@ -96,14 +87,13 @@ Sample dataset and notebooks to follow examples can be accessed at this [reposit
 - Pyrosm [Github](https://github.com/HTenkanen/pyrosm)
 - NetworkX [Github](https://github.com/networkx/networkx)
 - ipyleaflet [Github](https://github.com/jupyter-widgets/ipyleaflet)
-</br>
+
 
 --------------------------------------------------------------------------------
-
-</br>
-</br>
+<br>
+<br>
 <p align="center">
   <a href="https://ual.sg/">
-    <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/ualsg.jpeg" width = 50% alt="Logo">
+    <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/ualsg.jpeg" width = 55% alt="Logo">
   </a>
 </p>
