@@ -21,7 +21,7 @@ import numpy as np
 import networkx as nx
 import pandas as pd
 import geopandas as gpd
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, box
 from shapely.errors import ShapelyDeprecationWarning
 import ipyleaflet
 from ipyleaflet import basemaps, basemap_to_tiles, Icon, Marker, LayersControl, LayerGroup, DrawControl, FullScreenControl, ScaleControl, LocalTileLayer, GeoData
@@ -847,6 +847,290 @@ class Map(ipyleaflet.Map):
             print("--- %s seconds ---" % round(time.time() - start,3))
 
             return L, L_nodes, L_edges
+        
+    def get_point_context(
+            self, 
+            location: str,
+            points: gpd.GeoDataFrame,
+            filepath: str = '',
+            bandwidth: int = 200,
+            building_attr: bool = True,
+            pop_attr: bool = True,
+            poi_attr: bool = True,
+            svi_attr: bool = False) -> gpd.GeoDataFrame:
+        """Function to augment a GeoDataFrame of points with urban contextual information.
+        Bandwidth (m) controls Euclidean catchment radius to obtain contextual information.
+        *_attr arguments can be toggled on or off to allow computation of additional geographic information into networks.
+
+        Args:
+            location (str): Accepts city name or country name to obtain OpenStreetMap data.
+            points (gpd.GeoDataFrame): A geopandas dataframe with Point geometry.
+            filepath (str): If location is not available, user can specify path to osm.pbf file.
+            bandwidth (int): Distance to extract information beyond network. Defaults to 200.
+            building_attr (bool): Specifies whether building morphology attributes should be included. Defaults to True.
+            pop_attr (bool): Specifies whether population attributes should be included. Defaults to True.
+            poi_attr (bool): Specifies whether points of interest attributes should be included. Defaults to True.
+            svi_attr (bool): Specifies whether street view imagery attributes should be included. Defaults to False. 
+            
+        Returns:
+            gpd.GeoDataFrame: A geopandas dataframe of Point geometry with augmented geospatial contextual indicators.
+        """            
+
+        start = time.time()
+        if filepath == '':
+            try:
+                fp = get_data(location, directory = self.directory)
+                print('Creating data folder and downloading osm street data...')
+            except ValueError:
+                fp = get_data(self.country, directory = self.directory)
+                print(f"ValueError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+            except ValueError:
+                raise ValueError('No osm data found for specified location.')
+
+            print('Data extracted successfully. Proceeding to extract contextual attributes for point locations.')
+        elif filepath != '':
+            fp = filepath
+            print('Data found! Proceeding to extract contextual attributes for point locations.')
+
+        # Get the projected and buffered bounding box of points
+        xmin, ymin, xmax, ymax = points.geometry.total_bounds
+        geom = box(xmin, ymin, xmax, ymax)
+        original_bbox = gpd.GeoDataFrame(data=None, crs = 'epsg:4326', geometry = [geom])
+        buffered_tp = buffer_polygon(original_bbox, bandwidth=bandwidth)
+        buffered_bbox = buffered_tp.geometry.values[0]
+
+        # Obtain nodes and edges within buffered polygon
+        osm = pyrosm.OSM(fp, bounding_box=buffered_bbox)
+        proj_points = project_gdf(points)
+
+        # Buffer around points
+        points_buffer = proj_points.copy()
+        points_buffer['geometry'] = points_buffer.geometry.buffer(bandwidth)
+        
+        # If building_attr is True, compute and add building attributes.
+        if building_attr:
+            # Get building spatial data and project 
+            building = osm.get_buildings()
+            building_proj = project_gdf(building)
+
+            # Make geometry type homogeneous (polygons) to to allow overlay operation
+            building_polygon = fill_and_expand(building_proj)
+            building_polygon = building_polygon.reset_index()
+
+            # Assign unique building id
+            building_polygon['bid'] = building_polygon.index
+            building_polygon['bid_area'] = building_polygon.geometry.area
+            building_polygon['bid_length'] = building_polygon.geometry.length
+            building_polygon['bid_complexity'] = building_polygon['bid_length'] / np.sqrt(np.sqrt(building_polygon['bid_area'])) 
+            building_polygon = building_polygon[['bid', 'bid_area', 'bid_length', 'bid_complexity', 'geometry']]
+
+            # Compute and add building attributes
+            res_intersection = building_polygon.overlay(points_buffer, how='intersection')
+            # building_set = building_polygon.iloc[list(res_intersection['bid'].unique()),:]
+            res_intersection['area'] = res_intersection.geometry.area
+            area_series = res_intersection.groupby(['oid'])['area'].sum()
+            total_area = math.pi*bandwidth**2
+            area_series = area_series / total_area
+            area_series.name = 'Footprint Proportion'
+            
+            # Obtain proportion 
+            points = points.merge(area_series, on='oid', how='left')
+            
+            # Obtain mean area
+            mean_series = res_intersection.groupby(['oid'])['bid_area'].mean()
+            mean_series.name = 'Footprint Mean'
+            points = points.merge(mean_series, on='oid', how='left')
+
+            # Obtain mean area
+            std_series = res_intersection.groupby(['oid'])['bid_area'].std()
+            std_series.name = 'Footprint Stdev'
+            points = points.merge(std_series, on='oid', how='left')
+
+            # Add perimeter
+            perimeter_series = res_intersection.groupby(['oid'])['bid_length'].sum()
+            perimeter_series.name = 'Perimeter Total'
+            points = points.merge(perimeter_series, on='oid', how='left')
+
+            perimeter_mean_series = res_intersection.groupby(['oid'])['bid_length'].mean()
+            perimeter_mean_series.name = 'Perimeter Mean'
+            points = points.merge(perimeter_mean_series, on='oid', how='left')
+
+            perimeter_std_series = res_intersection.groupby(['oid'])['bid_length'].std()
+            perimeter_std_series.name = 'Perimeter Stdev'
+            points = points.merge(perimeter_std_series, on='oid', how='left')
+
+            # Add complexity Mean and Std.dev
+            compl_mean_series = res_intersection.groupby(['oid'])['bid_complexity'].mean()
+            compl_mean_series.name = 'Complexity Mean'
+            points = points.merge(compl_mean_series, on='oid', how='left')
+
+            compl_std_series = res_intersection.groupby(['oid'])['bid_complexity'].std()
+            compl_std_series.name = 'Complexity Stdev'
+            points = points.merge(compl_std_series, on='oid', how='left')
+
+            # Add counts
+            counts_series = res_intersection.groupby(['oid'])['oid'].count()
+            counts_series.name = 'Building Count'
+            points = points.merge(counts_series, on='oid', how='left')
+
+            # Add building attributes to node dataframe
+            points['Footprint Proportion'] = points['Footprint Proportion'].replace(np.nan, 0).astype(float).round(3)
+            points['Footprint Mean'] = points['Footprint Mean'].replace(np.nan, 0).astype(float).round(3)
+            points['Footprint Stdev'] = points['Footprint Stdev'].replace(np.nan, 0).astype(float).round(3)
+            points['Complexity Mean'] = points['Complexity Mean'].replace(np.nan, 0).astype(float).round(3)
+            points['Complexity Stdev'] = points['Complexity Stdev'].replace(np.nan, 0).astype(float).round(3)
+            points['Perimeter Total'] = points['Perimeter Total'].replace(np.nan, 0).astype(float).round(3)
+            points['Perimeter Mean'] = points['Perimeter Mean'].replace(np.nan, 0).astype(float).round(3)
+            points['Perimeter Stdev'] = points['Perimeter Stdev'].replace(np.nan, 0).astype(float).round(3)
+            points['Building Count'] = points['Building Count'].replace(np.nan, 0).astype(int)
+        
+            print(f'Building morphology attributes computed. Time taken: {round(time.time() - start)}.')   
+
+            # If pop_attr is True, compute and add population attributes.
+        if pop_attr:
+            tile_countries_path = pkg_resources.resource_filename('urbanity', "map_data/tiled_data.json")
+            with open(tile_countries_path, 'r') as f:
+                tile_dict = json.load(f)
+                
+            tiled_country = [country[:-13] for country in list(tile_dict.keys())]
+            groups = ['PopSum', 'Men', 'Women', 'Elderly','Youth','Children']
+            # Use csv for small countries
+            if self.country not in tiled_country:
+                print('Using non-tiled population data.')
+                pop_list, target_cols = get_population_data(self.country, 
+                                                            bounding_poly=buffered_tp)
+                
+                for i, data in enumerate(zip(pop_list, target_cols)):
+                    proj_data = data[0].to_crs(points_buffer.crs)
+                    res_intersection = proj_data.overlay(points_buffer, how='intersection')
+                    pop_total_series = res_intersection.groupby(['oid'])[data[1]].sum()
+                    pop_total_series.name = groups[i]
+                    points = points.merge(pop_total_series, on='oid', how='left')
+
+                        
+                for name in groups:
+                    points[name] = points[name].replace(np.nan, 0).astype(int)
+        
+            # If big country, use csv and custom tiled population data: (e.g. USA: https://figshare.com/articles/dataset/USA_TILE_POPULATION/21502296)
+            elif self.country in tiled_country:
+                print('Using tiled population data.')
+                pop_list, target_cols = get_tiled_population_data(self.country, bounding_poly = buffered_tp)
+                
+                for i, data in enumerate(zip(pop_list, target_cols)):
+                    proj_data = data[0].to_crs(points_buffer.crs)
+                    res_intersection = proj_data.overlay(points_buffer, how='intersection')
+                    pop_total_series = res_intersection.groupby(['oid'])[data[1]].sum()
+                    pop_total_series.name = groups[i]
+                    points = points.merge(pop_total_series, on='oid', how='left')
+                        
+                for name in groups:
+                    points[name] = points[name].replace(np.nan, 0).astype(int)
+
+            print(f'Population attributes computed. Time taken: {round(time.time() - start)}.')   
+
+            # If poi_attr is True, compute and add poi attributes.
+        if poi_attr:
+            # Load poi information 
+            poi_path = pkg_resources.resource_filename('urbanity', "map_data/poi_filter.json")
+            with open(poi_path) as poi_filter:
+                poi_filter = json.load(poi_filter)
+            
+            # Get osm pois based on custom filter
+            pois = osm.get_pois(custom_filter = poi_filter['custom_filter'])
+            pois = pois.replace(np.nan, '')
+
+            # Relabel amenities to common typology
+            def poi_col(amenity, shop, tourism, leisure):
+                value = amenity
+                if amenity == '' and tourism != '':
+                    value = 'entertainment'
+                elif amenity == '' and leisure != '':
+                    value = 'recreational'
+                elif amenity == '' and shop in poi_filter['food_set']:
+                    value = shop
+                elif amenity == '' and shop not in poi_filter['food_set']:
+                    value = 'commercial'
+                
+                return value
+        
+            pois['poi_col'] = pois.apply(lambda row: poi_col(row['amenity'], row['shop'], row['tourism'], row['leisure']), axis=1)
+            
+            pois = pois[['id', 'osm_type','lon','lat','poi_col','geometry']]
+
+            # Remove amenities that have counts of less than n=5
+            pois = finetune_poi(pois, 'poi_col', poi_filter['replace_dict'], n=5)
+
+            pois = project_gdf(pois)
+            pois['geometry'] = pois.geometry.centroid
+
+            # Get intersection of amenities with node buffer
+            res_intersection = pois.overlay(points_buffer, how='intersection')
+            poi_series = res_intersection.groupby(['oid'])['poi_col'].value_counts()
+            pois_df = pd.DataFrame(index = poi_series.index, data = poi_series.values).reset_index()
+            pois_df = pd.pivot(pois_df, index='oid', columns='poi_col', values=0).fillna(0)
+
+            col_order = list(points.columns)
+            cols = list(['civic', 'commercial', 'entertainment', 'food', 'healthcare', 'institutional', 'recreational', 'social'])
+            col_order = col_order + cols
+
+            # Add poi attributes to dataframe of nodes
+            points = points.merge(pois_df, on='oid', how='left')
+
+            for i in cols:
+                if i not in set(points.columns):
+                    points[i] = 0
+                elif i in set(points.columns):
+                    points[i] = points[i].replace(np.nan, 0)
+                
+            points = points[col_order]
+            points = points.rename(columns = {'commercial':'Commercial', 'entertainment':'Entertainment','food':'Food','healthcare':'Healthcare','civic':'Civic', 'institutional':'Institutional', 'recreational':'Recreational', 'social':'Social'})
+
+            print(f'Points of interest computed. Time taken: {round(time.time() - start)}.')
+
+        # If svi_attr is True, compute and add svi attributes.
+        if svi_attr:
+            tile_gdf = get_tile_geometry(buffered_tp)
+            tile_gdf = tile_gdf.set_crs(buffered_tp.crs)
+            proj_tile_gdf = project_gdf(tile_gdf)
+
+            svi_path = pkg_resources.resource_filename('urbanity', 'svi_data/svi_data.json')
+            with open(svi_path, 'r') as f:
+                svi_dict = json.load(f)
+            svi_location = location.replace(' ', '')
+            svi_data = gpd.read_file(svi_dict[f'{svi_location}.geojson'])
+            svi_data = project_gdf(svi_data)
+
+            # Associate each node with respective tile_id and create mapping dictionary
+            tile_id_with_nodes = gpd.sjoin(proj_points, proj_tile_gdf)
+            node_and_tile = {}
+            for k,v in zip(tile_id_with_nodes['tile_id'], tile_id_with_nodes['oid']):
+                node_and_tile[v] = k
+
+            # Spatial intersection of SVI points and node buffers
+            res_intersection = svi_data.overlay(points_buffer, how='intersection')
+
+            # Compute SVI indices
+            indicators = ['Green View', 'Sky View', 'Building View', 'Road View', 'Visual Complexity']
+            for indicator in indicators:
+                svi_mean_series = res_intersection.groupby(['oid'])[indicator].mean()
+                svi_mean_series.name = f'{indicator} Mean'
+                points = points.merge(svi_mean_series, on='oid', how='left')
+                svi_tile_mean_aggregate = dict(svi_data.groupby(['tile_id'])[indicator].mean())
+                points[f'{indicator} Mean'] = points.apply(lambda row: replace_nan_with_tile(svi_tile_mean_aggregate, node_and_tile, row[f'{indicator} Mean'],row.oid), axis=1)
+
+
+                svi_std_series = res_intersection.groupby(['oid'])[indicator].std()
+                svi_std_series.name = f'{indicator} Stdev'
+                points = points.merge(svi_std_series, on='oid', how='left')
+                svi_tile_std_aggregate = dict(svi_data.groupby(['tile_id'])[indicator].std())
+                points[f'{indicator} Stdev'] = points.apply(lambda row: replace_nan_with_tile(svi_tile_std_aggregate, node_and_tile, row[f'{indicator} Stdev'],row.oid), axis=1)
+
+            print(f'SVI attributes computed. Time taken: {round(time.time() - start)}.')
+        # Add computed indices to nodes dataframe
+
+        print("Total elapsed time --- %s seconds ---" % round(time.time() - start))
+        
+        return points
 
     def get_aggregate_stats(
         self,
@@ -855,7 +1139,7 @@ class Map(ipyleaflet.Map):
         column: str = None, 
         bandwidth: int = 0,
         get_svi: bool = False,
-        network_type: str = 'driving') -> dict:
+        network_type: str = 'driving') -> pd.DataFrame:
         """Obtains descriptive statistics for bounding polygon without constructing network. Users can specify bounding polygon either by drawing on the map object, or uploading a geojson/shapefile.
         If geojson/shape file contains multiple geometric objects, descriptive statistics will be returned for all entities. Results are returned in dictionary format. 
 

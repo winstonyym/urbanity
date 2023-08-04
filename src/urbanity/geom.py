@@ -600,3 +600,16 @@ def merge_zones_by_group(gdf, column):
     city_subzone = gpd.GeoDataFrame(city_subzone, crs='epsg:4326', geometry = city_subzone['geometry'])
     
     return city_subzone
+
+def wkt_to_gpd(df):
+    """Function to convert a pandas dataframe with geometry column in well-known text to geopandas geodataframe with shapely geometry columns.
+
+    Args:
+        df (pd.DataFrame): A pandas dataframe with geometry column in well-known text (WKT) format.
+
+    Returns:
+        gpd.GeoDataFrame: A geopandas dataframe with geometry column as shapely geometric objects.
+    """    
+    geom = df.geometry.apply(wkt.loads)
+    gdf = gpd.GeoDataFrame(data = df, crs = 'epsg:4326', geometry=geom)
+    return gdf
