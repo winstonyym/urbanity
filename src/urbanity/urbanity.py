@@ -6,14 +6,15 @@ import time
 import math
 import glob
 import warnings
+import requests
 from unittest import skip
 import pkg_resources
 from webbrowser import get
 
 # import module functions and classes
-from .utils import get_country_centroids, finetune_poi
+from .utils import get_country_centroids, finetune_poi, get_available_precomputed_network_data
 from .geom import *
-from .population import get_population_data, get_tiled_population_data
+from .population import get_population_data, get_tiled_population_data, raster2gdf
 from .topology import compute_centrality, merge_nx_property, merge_nx_attr
 
 # import external functions and classes
@@ -250,6 +251,127 @@ class Map(ipyleaflet.Map):
         gdf = gpd.GeoDataFrame(data=df, crs=self.polygon_bounds.crs, geometry = self.polygon_bounds['geometry'])
         return gdf
 
+    def check_population(self,
+                        year: int = 2020) -> [dict, gpd.GeoDataFrame]:
+        """Function to check the correspondence of Meta's high resolution population counts (30m) with WorldPop (100m) UN-Adjusted dataset:
+        WorldPop (www.worldpop.org - School of Geography and Environmental Science, University of Southampton; Department of Geography and Geosciences, 
+        University of Louisville; Departement de Geographie, Universite de Namur) and Center for International Earth Science Information Network (CIESIN), 
+        Columbia University (2018). Global High Resolution Population Denominators Project - Funded by The Bill and Melinda Gates Foundation (OPP1134076).
+
+        Args:
+            year (int): Specific year to extract World Population data.
+
+        Returns:
+            dict: A dictionary consisting of evaluation metrics 
+            gpd.DataFrame: A geopandas dataframe with attribute completeness for OSM buildings
+        """
+
+        # Get Worldpop .tiff address from ISO code
+        ISO_path = pkg_resources.resource_filename('urbanity', 'map_data/GADM_links.json')
+        with open(ISO_path) as file:
+          ISO = json.load(file)
+
+        path = f'https://data.worldpop.org/GIS/Population/Global_2000_{year}_Constrained/{year}/BSGM/{ISO[self.country]}/{ISO[self.country].lower()}_ppp_{year}_UNadj_constrained.tif'
+        maxar_path = f'https://data.worldpop.org/GIS/Population/Global_2000_{year}_Constrained/{year}/maxar_v1/{ISO[self.country]}/{ISO[self.country].lower()}_ppp_{year}_UNadj_constrained.tif'
+        # Check if data folder exists, else create one
+        if os.path.isdir('./data'):
+            self.directory = "./data"
+        else:
+            os.makedirs('./data')
+            self.directory = "./data"
+
+        # Download Worldpop data for specified `year`
+        filename = path.split('/')[-1].replace(" ", "_")  # be careful with file names
+        filename_maxar = maxar_path.split('/')[-1].replace(" ", "_")  # be careful with file names
+        file_path = os.path.join(self.directory, filename)
+        file_path_maxar = os.path.join(self.directory, filename_maxar)
+
+        if not os.path.exists(file_path):
+            print('Raster file not found in data folder, proceeding to download.')
+            r = requests.get(path, stream=True)
+            if r.ok:
+                print(f"Saved raster file for {self.country} to: \n", os.path.abspath(file_path))
+                with open(file_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 8):
+                        if chunk:
+                            f.write(chunk)
+                            f.flush()
+                            os.fsync(f.fileno())
+            else:
+                r = requests.get(maxar_path, stream=True)
+                file_path = file_path_maxar
+                print(f"Saved raster file for {self.country} to: \n", os.path.abspath(file_path))
+                with open(file_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 8):
+                        if chunk:
+                            f.write(chunk)
+                            f.flush()
+                            os.fsync(f.fileno())
+
+        else:
+            print('Data found! Proceeding to load population data. ')
+
+        
+        # Load Worldpop data
+        print('Loading Worldpop Population Data...')
+        from_raster_100m = raster2gdf(file_path, zoom=True, boundary=self.polygon_bounds)
+        from_raster_100m['grid_id'] = range(len(from_raster_100m))
+
+        # Load Meta Population Data
+        print('Loading Meta Population Data...')
+        tile_countries_path = pkg_resources.resource_filename('urbanity', "map_data/tiled_data.json")
+        with open(tile_countries_path, 'r') as f:
+            tile_dict = json.load(f)
+                    
+        tiled_country = [country[:-13] for country in list(tile_dict.keys())]
+        groups = ['PopSum', 'Men', 'Women', 'Elderly','Youth','Children']
+        
+        # Use non-tiled .csv for small countries
+        if self.country not in tiled_country:
+            print('Using non-tiled population data.')
+            pop_gdf, target_col = get_population_data(self.country, 
+                                                        bounding_poly=self.polygon_bounds,
+                                                        all_only = True)
+
+        # If big country, use csv and custom tiled population data: (e.g. USA: https://figshare.com/articles/dataset/USA_TILE_POPULATION/21502296)
+        elif self.country in tiled_country:
+            print('Using tiled population data.')
+            pop_gdf, target_col = get_tiled_population_data(self.country, 
+                                                              bounding_poly = self.polygon_bounds, 
+                                                              all_only=True)
+        # Preprocess both population files; Add aggregate meta to Worldpop grids
+
+    
+        res_intersection = gpd.overlay(pop_gdf, from_raster_100m, how='intersection')
+        aggregate_series = res_intersection.groupby(['grid_id'])[target_col].sum()
+        combined = from_raster_100m.merge(aggregate_series, on ='grid_id')
+        # Get non-empty cells
+        non_empty = combined[combined['value']!=-99999.0].copy()
+        
+        # Get percentage of correct cells
+        perc_hits = (len(combined[((combined['value'] == -99999.0) | (combined['value'] == 0)) & (combined[target_col]==0)]) + 
+                        len(combined[(combined['value'] > 0) & (combined[target_col]>0)])) / len(combined)
+        
+        # Get total population counts
+        meta_total = non_empty[target_col].sum()
+        worldpop_total = non_empty['value'].sum()
+        
+        # Get correlation between non-empty cells
+        world_meta_corr = non_empty['value'].corr(non_empty[target_col])
+        
+        # Get absolute difference
+        non_empty.loc[:,'deviance'] = non_empty['value'] - non_empty[target_col]
+        non_empty.loc[:,'abs_deviance'] = abs(non_empty['value'] - non_empty[target_col])
+        mean_absolute_error = non_empty['abs_deviance'].mean()
+        
+        values_dict = {}
+        values_dict['Grids hit percentage'] = perc_hits
+        values_dict['Meta population total'] = meta_total
+        values_dict['Worldpop population total'] = worldpop_total
+        values_dict['Worldpop/meta correlation'] = world_meta_corr
+        values_dict['Mean absolute error'] = mean_absolute_error
+        
+        return values_dict, non_empty
 
     def get_street_network(
             self, 
@@ -263,6 +385,7 @@ class Map(ipyleaflet.Map):
             poi_attr: bool = True,
             svi_attr: bool = False,
             edge_attr: bool = False,
+            get_precomputed_100m: bool = False,
             dual: bool = False) -> [nx.MultiDiGraph, gpd.GeoDataFrame, gpd.GeoDataFrame]:
         """Function to generate either primal planar or dual (edge) networks. If multiple geometries are provided, 
         network is constructed for only the first entry. Please merge geometries before use.
@@ -279,6 +402,7 @@ class Map(ipyleaflet.Map):
             pop_attr (bool): Specifies whether population attributes should be included. Defaults to True.
             poi_attr (bool): Specifies whether points of interest attributes should be included. Defaults to True.
             edge_attr (bool): If True, computes edge attributes (available for buildings, pois, population, and svi). Defaults to True.
+            get_precomputed_100m (bool): If True, directly downloads network data from the Global Urban Network Repository instead of computing. Defaults to False.
             dual (bool): If true, creates a dual (edge) network graph. Defaults to False.
             
         Raises:
@@ -288,9 +412,22 @@ class Map(ipyleaflet.Map):
             nx.MultiDiGraph: A networkx/osmnx primal planar or dual (edge) network with specified attribute information.
             gpd.GeoDataFrame: A geopandas dataframe of network nodes with Point geometry.
             gpd.GeoDataFrame: A geopandas dataframe of network edges with Linestring geometry.
-        """            
+        """ 
+
+        if get_precomputed_100m:   
+            try:
+                network_dataset = pkg_resources.resource_filename('urbanity', "map_data/network_data.json")
+                with open(network_dataset, 'r') as f:
+                    network_data = json.load(f)
+                nodes = gpd.read_file(network_data[f'{location.title()}_nodes_100m.geojson'])
+                edges = gpd.read_file(network_data[f'{location.title()}_edges_100m.geojson'])
+                return None,nodes,edges
+            except:
+                get_available_precomputed_network_data()
+                return [None, None, None]
 
         start = time.time()
+
         if filepath == '':
             try:
                 fp = get_data(location, directory = self.directory)

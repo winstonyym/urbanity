@@ -50,6 +50,7 @@ def buffer_polygon(gdf, bandwidth = 200):
     buffered_gdf = buffer_zone.to_crs(4326)
     return buffered_gdf
 
+
 def great_circle_vec(lat1, lng1, lat2, lng2, earth_radius=6371009):
     """Computes the great-circle distance (straightline) between point pairs.
 

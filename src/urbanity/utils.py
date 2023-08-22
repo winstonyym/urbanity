@@ -47,6 +47,20 @@ def get_available_countries():
     country_dict = set(get_country_centroids())
     print(sorted(country_dict))
 
+def get_available_precomputed_network_data():
+    """Prints list of cities available from the Global Urban Network Dataset
+    """
+    data_path = pkg_resources.resource_filename('urbanity', "map_data/network_data.json")
+    with open(data_path) as f:
+        city_dict = json.load(f)
+
+    list_of_cities = []
+    for entry in city_dict.keys():
+        if entry.split('_')[0] not in list_of_cities:
+            list_of_cities.append(entry.split('_')[0])
+    
+    print(f'The following cities are available: {sorted(list_of_cities)}.')
+
 def finetune_poi(df, target, relabel_dict, n=5):
     """Relabel and trim poi list to main categories ('Civic', 'Commercial', 'Entertainment', 'Food', 'Healthcare', 'Institutional', 'Recreational', 'Social')
 
