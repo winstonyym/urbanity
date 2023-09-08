@@ -14,6 +14,7 @@ from webbrowser import get
 # import module functions and classes
 from .utils import get_country_centroids, finetune_poi, get_available_precomputed_network_data
 from .geom import *
+from .building import *
 from .population import get_population_data, get_tiled_population_data, raster2gdf
 from .topology import compute_centrality, merge_nx_property, merge_nx_attr
 
@@ -1532,93 +1533,171 @@ class Map(ipyleaflet.Map):
 
         return pd.DataFrame(attr_stats).transpose()
 
-    # Not implemented yet
-    # def get_building_network(
-    #         self, 
-    #         network_type: str = 'driving',
-    #         bandwidth: int = 200) -> MultiDiGraph:
-    #     """Generate a network where nodes correspond to building centroids and edges connect buildings within threshold distance of one another. 
+    
+    def get_building_network(
+            self, 
+            location: str,
+            network_type: str = 'driving',
+            bandwidth: int = 200) -> nx.MultiDiGraph:
+        """Generate a four-layer heterogeneous graph network. Nodes correspond to street intersections, mid-point of streets, urban plots, and buildings. 
+        Edges between nodes are determined by their spatial relationships (e.g. buildings within urban plots, nearest buildings sharing a common street edge, intersection connecting to street, and streets adjacent to urban plot). 
 
-    #     Args:
-    #         network_type (str, optional): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
+        Args:
+            network_type (str, optional): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
 
-    #     Raises:
-    #         Exception: No bounding box found. 
+        Raises:
+            Exception: No bounding box found. 
 
-    #     Returns:
-    #         nx.MultiDiGraph: Returns a building network object. 
-    #     """        
-    #     start = time.time()
-    #     print('Creating data folder and downloading osm building data...')
-    #     fp = get_data(self.country, directory = self.directory)
-    #     print('Data extracted successfully. Proceeding to construct building network.')
+        Returns:
+            nx.MultiDiGraph: Returns a building network object. 
+        """        
+        start = time.time()
+        print('Creating data folder and downloading osm building data...')
+        fp = get_data(self.country, directory = self.directory)
+        print('Data extracted successfully. Proceeding to construct building network.')
 
-    #     # Project and buffer original polygon to examine nodes outside boundary
-    #     try:
-    #         original_bbox = self.polygon_bounds.geometry.values[0]
-    #         buffered_tp = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
-    #         buffered_bbox = buffered_tp.geometry.values[0]
-    #     # catch when it hasn't even been defined 
-    #     except (AttributeError, NameError):
-    #         raise Exception('Please delimit a bounding box.')
+        # Project and buffer original polygon to examine nodes outside boundary
+        try:
+            original_bbox = self.polygon_bounds.geometry.values[0]
+            buffered_tp = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+            buffered_bbox = buffered_tp.geometry.values[0]
+        # catch when it hasn't even been defined 
+        except (AttributeError, NameError):
+            raise Exception('Please delimit a bounding box.')
 
-    #     # Obtain nodes and edges within buffered polygon
-    #     osm = pyrosm.OSM(fp, bounding_box=buffered_bbox)
+        # Obtain nodes and edges within buffered polygon
+        osm = pyrosm.OSM(fp, bounding_box=buffered_bbox)
 
-    #     # Get buildings
-    #     buildings = osm.get_buildings()
-    #     proj_buildings = project_gdf(buildings)
+        nodes, edges = osm.get_network(network_type=network_type, nodes=True)
 
-    #     # Get adjacency based on spatial intersection
-    #     building_neighbours = {}
-    #     for i,b in zip(proj_buildings.id,proj_buildings.geometry):
-    #         s = proj_buildings.intersects(b.buffer(100))
-    #         building_neighbours[i] = proj_buildings.id[s[s].index].values
-
-    #     # Set centroid as geometry and create lon and lat columns
-    #     proj_buildings['center'] = proj_buildings.geometry.centroid
-    #     proj_buildings = proj_buildings.set_geometry("center")
-    #     buildings = proj_buildings.to_crs(4326)
-    #     buildings['x'] = buildings.geometry.x
-    #     buildings['y'] = buildings.geometry.y
-    #     buildings = buildings.set_index('id')
-
-    #     # Create building network graph
-    #     # Get dict of building nodes and their attributes
-    #     id_to_attributes = {}
-    #     for node in set(buildings.index):
-    #         id_to_attributes[node] = buildings.loc[node].to_dict()
-
-    #     B = nx.empty_graph(0)
-    #     B.graph['crs'] = 'EPSG:4326'
-
-    #     # Add nodes
-    #     for node in set(buildings.index):
-    #         B.add_node(node)
-    #     nx.set_node_attributes(B, id_to_attributes)
-
-    #     # Add edges
-    #     for node, neighbours in building_neighbours.items():
-    #         for neighbour in neighbours:
-    #             B.add_edge(node, neighbour)
-
-    #     # Compute euclidean distance between adjacent building centroids
-    #     id_to_x = dict(zip(buildings.index, buildings.x))
-    #     id_to_y = dict(zip(buildings.index, buildings.y))
+        # Build networkx graph for pre-processing
+        G_buff = osm.to_graph(nodes, edges, graph_type="networkx", force_bidirectional=True, retain_all=True)
         
-    #     distance_between_buildings = {}
-    #     for pair in set(B.edges()):
-    #         distance_between_buildings[pair] = great_circle_vec(id_to_x[pair[0]], id_to_y[pair[0]], id_to_x[pair[1]], id_to_y[pair[1]])
+        # Add great circle length to network edges
+        G_buff = add_edge_lengths(G_buff)
+
+        # Simplify graph by removing nodes between endpoints and joining linestrings
+        G_buff_simple = simplify_graph(G_buff)
+
+        # Identify nodes inside and outside (buffered polygon) of original polygon
+        gs_nodes = graph_to_gdf(G_buff_simple, nodes=True)[["geometry"]]
+        to_keep = gs_nodes.within(original_bbox)
+        to_keep = gs_nodes[to_keep]
+        nodes_outside = gs_nodes[~gs_nodes.index.isin(to_keep.index)]
+        set_outside = nodes_outside.index
+
+        # Truncate network by edge if all neighbours fall outside original polygon
+        nodes_to_remove = set()
+        for node in set_outside:
+            neighbors = set(G_buff_simple.successors(node)) | set(G_buff_simple.predecessors(node))
+            if neighbors.issubset(nodes_outside):
+                nodes_to_remove.add(node)
         
-    #     nx.set_edge_attributes(B, distance_between_buildings, 'length')
+        G_buff_trunc = G_buff_simple.copy()
+        initial = G_buff_trunc.number_of_nodes()
+        G_buff_trunc.remove_nodes_from(nodes_to_remove)
 
-    #     # Identify largest weakly connected component
-    #     max_wcc = max(nx.connected_components(B), key=len)
-    #     B_max = nx.subgraph(B, max_wcc)
+        # Remove unconnected subgraphs
+        max_wcc = max(nx.weakly_connected_components(G_buff_trunc), key=len)
+        G_buff_trunc = nx.subgraph(G_buff_trunc, max_wcc)
 
-    #     B_nodes, B_edges = graph_to_gdf(B_max, nodes=True, edges=True, dual=True)
-    #     B_nodes = B_nodes.fillna('')
+        # Remove self loops
+        G_buff_trunc_loop = G_buff_trunc.copy()
+        G_buff_trunc_loop.remove_edges_from(nx.selfloop_edges(G_buff_trunc_loop))
 
-    #     print("--- %s seconds ---" % round(time.time() - start,3))
+        nodes, edges = graph_to_gdf(G_buff_trunc_loop, nodes=True, edges=True)
 
-    #     return B_max, B_nodes, B_edges
+        # Fill NA and drop incomplete columns
+        nodes = nodes.fillna('')
+        edges = edges.fillna('')
+        nodes = nodes.drop(columns=['osmid','tags','timestamp','version','changeset']).reset_index()
+        edges = edges.reset_index()[['u','v','length','geometry']]
+
+        # Assign unique IDs
+        nodes['node_id'] = nodes.index
+        nodes = nodes[['node_id','osmid', 'x', 'y', 'geometry']]
+        edges['edge_id'] = edges.index
+        edges = edges[['edge_id', 'u', 'v', 'length','geometry']]
+
+        print(f'Network constructed. Time taken: {round(time.time() - start)}.')
+
+        # Get buildings
+        overture_buildings = get_overture_buildings(location)
+        osm_buildings = osm.get_buildings()
+
+        # Process geometry and attributes for Overture buildings
+        overture_geom = preprocess_overture_building_geometry(overture_buildings, minimum_area=30)
+        overture_attr = preprocess_overture_building_attributes(overture_geom, return_class_height=False)
+
+        # Process geometry and attributes for Overture buildings
+        osm_geom = preprocess_osm_building_geometry(osm_buildings, minimum_area=30)
+        osm_attr = preprocess_osm_building_attributes(osm_geom, return_class_height=False)
+
+        # Obtain unique ids for buildings
+        overture_attr_uids = assign_numerical_id_suffix(overture_attr, 'overture')
+        osm_attr_uids = assign_numerical_id_suffix(osm_attr, 'osm')
+
+        # Merged building and augment with additional attributes from OSM
+        merged_building = merge_osm_to_overture_footprints(overture_attr_uids, osm_attr_uids)
+        merged_building_attr = extract_attributed_osm_buildings(merged_building, osm_attr_uids, column = 'osm_combined_heights', threshold = 50)
+
+        # Obtain building network
+        merged_building_attr_nodes = merged_building_attr.copy()
+        merged_building_attr_nodes['centroid'] = merged_building_attr_nodes.geometry.centroid
+        merged_building_attr_nodes = merged_building_attr_nodes.set_geometry("centroid")
+        merged_building_attr_nodes = merged_building_attr_nodes.to_crs(4326)
+        merged_building_attr_nodes['x'] = merged_building_attr_nodes.geometry.x
+        merged_building_attr_nodes['y'] = merged_building_attr_nodes.geometry.y
+        merged_building_attr_nodes = merged_building_attr_nodes.set_index('building_id')
+
+        print(f'Buildings constructed. Time taken: {round(time.time() - start)}.')
+
+        return nodes, edges, merged_building_attr, merged_building_attr_nodes
+        # Create building network graph
+        # Get dict of building nodes and their attributes
+        id_to_attributes = {}
+        for node in set(merged_building_attr_nodes.index):
+            id_to_attributes[node] = merged_building_attr_nodes.loc[node].to_dict()
+
+        # Create empty graph and set graph attribute
+        B = nx.empty_graph(0)
+        B.graph['crs'] = 'EPSG:4326'
+
+        # Add nodes to graph
+        for node in set(merged_building_attr_nodes.index):
+            B.add_node(node)
+        nx.set_node_attributes(B, id_to_attributes)
+
+        # Get adjacency based on spatial intersection
+        building_neighbours = {}
+        for i,b in zip(merged_building_attr.building_id, merged_building_attr.geometry):
+            s = merged_building_attr.intersects(b.buffer(100))
+            building_neighbours[i] = merged_building_attr.building_id[s[s]['building_id']].values
+
+
+        # Add edges
+        for node, neighbours in building_neighbours.items():
+            for neighbour in neighbours:
+                B.add_edge(node, neighbour)
+
+        # Compute euclidean distance between adjacent building centroids
+        id_to_x = dict(zip(merged_building_attr_nodes.index, merged_building_attr_nodes.x))
+        id_to_y = dict(zip(merged_building_attr_nodes.index, merged_building_attr_nodes.y))
+
+
+        distance_between_buildings = {}
+        for pair in set(B.edges()):
+            distance_between_buildings[pair] = great_circle_vec(id_to_x[pair[0]], id_to_y[pair[0]], id_to_x[pair[1]], id_to_y[pair[1]])
+        
+        # nx.set_edge_attributes(B, distance_between_buildings, 'length')
+
+        # # Identify largest weakly connected component
+        # max_wcc = max(nx.connected_components(B), key=len)
+        # B_max = nx.subgraph(B, max_wcc)
+
+        # B_nodes, B_edges = graph_to_gdf(B_max, nodes=True, edges=True, dual=True)
+        # B_nodes = B_nodes.fillna('')
+
+        # print("--- %s seconds ---" % round(time.time() - start,3))
+
+        # return B_max, B_nodes, B_edges
