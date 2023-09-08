@@ -467,7 +467,7 @@ def fill_and_expand(gdf):
             try:
                 polygon_geom = Polygon(list(list(linestring_exploded.geometry.iloc[min_ind].coords)), 
                                   holes = holes)
-                polygon = gpd.GeoDataFrame(index=[0], crs=linestring.crs, geometry=[polygon_geom]) 
+                polygon = gpd.GeoDataFrame(index=[0], data=[linestring], crs=linestring.crs, geometry=[polygon_geom]) 
                 gdf2 = gpd.GeoDataFrame(pd.concat([gdf2, polygon], ignore_index=True), crs=gdf2.crs) 
 
             except ValueError:
