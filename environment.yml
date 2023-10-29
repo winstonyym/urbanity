@@ -8,7 +8,9 @@ dependencies:
   - ipykernel
   - ipyleaflet
   - ipywidgets==8.0.2
+  - rasterio
+  - contextily
+  - pyarrow
   - pip:
-    - urbanity==0.3.13
-
+    - urbanity==0.3.14
 prefix: /Users/winston/miniconda3/envs/urbanity
