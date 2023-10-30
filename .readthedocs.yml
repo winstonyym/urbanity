@@ -9,10 +9,9 @@ build:
 
 sphinx:
   configuration: docs/conf.py
-  
+
 # Configuration
 python:
-  version: 3.9
   install:
     - requirements: docs/requirements.txt
     - method: pip
