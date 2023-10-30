@@ -489,6 +489,14 @@ def _circle_radius(points):
     return circ[2]
 
 def _make_circle(points):
+    """Helper function to generate circles from list of shapely points. 
+
+    Args:
+        points (list): List of shapely Points.
+
+    Returns:
+        list: List of circle Polygons. 
+    """    
     # Convert to float and randomize order
     shuffled = [(float(x), float(y)) for (x, y) in points]
     random.shuffle(shuffled)
@@ -501,7 +509,15 @@ def _make_circle(points):
     return c
 
 def _make_circle_one_point(points, p):
-    """One boundary point known."""
+    """Helper function to generate circles from list of shapely points when one boundary point is known.
+
+    Args:
+        points (list): List of shapely Points.
+        p (shapely.geometry.Point): Boundary point
+
+    Returns:
+        list: List of circle Polygons. 
+    """    
     c = (p[0], p[1], 0)
     for i, q in enumerate(points):
         if not _is_in_circle(c, q):
@@ -512,7 +528,16 @@ def _make_circle_one_point(points, p):
     return c
 
 def _make_circle_two_points(points, p, q):
-    """Two boundary points known."""
+    """Helper function to generate circles from list of shapely points when two boundary points are known.
+
+    Args:
+        points (list): List of shapely Points.
+        p (shapely.geometry.Point): First boundary point.
+        q (shapely.geometry.Point): Second boundary point
+
+    Returns:
+        list: List of circle Polygons. 
+    """    
     circ = _make_diameter(p, q)
     left = None
     right = None
@@ -555,7 +580,16 @@ def _make_circle_two_points(points, p, q):
 
 
 def _make_circumcircle(p0, p1, p2):
-    """Mathematical algorithm from Wikipedia: Circumscribed circle."""
+    """Helper function to generate a circumscribed circle bounded by three points. Mathematical algorithm from Wikipedia: Circumscribed circle.
+
+    Args:
+        p0 (shapely.geometry.Point): First boundary point.
+        p1 (shapely.geometry.Point): Second boundary point.
+        p2 (shapely.geometry.Point): Third boundary point.
+
+    Returns:
+        tuple: Returns a set of values corresponding to circle center and its radius.
+    """    
     ax, ay = p0
     bx, by = p1
     cx, cy = p2
@@ -594,19 +628,47 @@ def _make_circumcircle(p0, p1, p2):
     return (x, y, max(ra, rb, rc))
 
 def _is_in_circle(c, p):
+    """Helper function to check if a point is within a circle
+
+    Args:
+        c (tuple): Tuple consisting of circle's x, y, and radius. 
+        p (shapely.geometry.Point): Shapely point. 
+
+    Returns:
+        bool: Returns True if point is within circle. 
+    """    
     return (
         c is not None
         and math.hypot(p[0] - c[0], p[1] - c[1]) <= c[2] * _MULTIPLICATIVE_EPSILON
     )
 
 def _cross_product(x0, y0, x1, y1, x2, y2):
-    """
-    Returns twice the signed area of the
+    """Returns twice the signed area of the
     triangle defined by (x0, y0), (x1, y1), (x2, y2).
-    """
+
+    Args:
+        x0 (_type_): x coordinate of first point.
+        y0 (_type_): y coordinate of first point.
+        x1 (_type_): x coordinate of second point.
+        y1 (_type_): y coordinate of second point.
+        x2 (_type_): x coordinate of third point.
+        y2 (_type_): y coordinate of third point.
+
+    Returns:
+        float: Twice signed area of triangle.
+    """    
     return (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0)
 
 def _make_diameter(p0, p1):
+    """Helper function to return a circle between two points.
+
+    Args:
+        p0 (shapely.geometry.Point): First Shapely point. 
+        p1 (shapely.geometry.Point): Second Shapely point. 
+
+    Returns:
+        tuple: Returns a set of values corresponding to the mid point of two points and its radius. 
+    """    
     cx = (p0[0] + p1[0]) / 2
     cy = (p0[1] + p1[1]) / 2
     r0 = math.hypot(cx - p0[0], cy - p0[1])
@@ -614,6 +676,16 @@ def _make_diameter(p0, p1):
     return (cx, cy, max(r0, r1))
 
 def _true_angle(a, b, c):
+    """Returns the true angle between three points. 
+
+    Args:
+        a (np.array): Point one.
+        b (np.array): Point two.
+        c (np.array): Point three.
+
+    Returns:
+        bool: Returns true angle. If degree <= 170 or >= 190, return True, else False. 
+    """    
     ba = a - b
     bc = c - b
 
@@ -629,6 +701,14 @@ def _true_angle(a, b, c):
 
 
 def get_minimum_bounding_rectangle(building_nodes):
+    """Helper function to generate minimum bounding rectangle around each Polygon.
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame corresponding to building footprints. 
+
+    Returns:
+        list: A list consisting of minimum bounding rectangles (shapely.geometry.Polygon) for each building footprint. 
+    """    
     # Adapted and modified to work with gpd.GeoDataFrame input (Original algorithm:  https://stackoverflow.com/questions/13542855/algorithm-to-find-the-minimum-area-rectangle-for-given-points-in-order-to-comput answered by user JesseBuesking)
     
     from scipy.ndimage import rotate
@@ -687,14 +767,41 @@ def get_minimum_bounding_rectangle(building_nodes):
     return mbr_list
 
 def _dist(a, b):
+    """Returns the Euclidean distance between two points.
+
+    Args:
+        a (shapely.geometry.Point): Shapely Point.
+        b (shapely.geometry.Point): Shapely Point.
+
+    Returns:
+        float: Distance between two points.
+    """    
     return math.hypot(b[0] - a[0], b[1] - a[1])
 
 def _azimuth(point1, point2):
-    """Return the azimuth between 2 shapely points (interval 0 - 180)."""
+    """Return the azimuth between 2 shapely points (interval 0 - 180).
+
+    Args:
+        point1 (shapely.geometry.Point): Shapely Point.
+        point2 (shapely.geometry.Point): Shapely Point.
+
+    Returns:
+        float: Azimuth between two points.
+    """
     angle = np.arctan2(point2[0] - point1[0], point2[1] - point1[1])
     return np.degrees(angle) % 180
 
 def _make_linestring(centroid, angle, length):
+    """Helper function to generate linestring with given length and angle. 
+
+    Args:
+        centroid (tuple): Tuple containing x and y coordinates.
+        angle (float): Angle of vector.
+        length (float): Length of vector.
+
+    Returns:
+        shapely.geometry.LineString: Linestring object.
+    """    
     x, y = centroid[0], centroid[1]
     endy = y + length * math.sin(angle)
     endx = x + length * math.cos(angle)
@@ -704,6 +811,16 @@ def _make_linestring(centroid, angle, length):
     return LineString([(fromx,fromy),(x,y), (endx, endy)])
 
 def _angle(a, b, c):
+    """Helper function to compute angle between vectors.
+
+    Args:
+        a (np.array): Numerical vector a.
+        b (np.array): Numerical vector b.
+        c (np.array): Numerical vector c.
+
+    Returns:
+        float: Angle between vectors.
+    """    
             ba = a - b
             bc = c - b
 
@@ -713,6 +830,14 @@ def _angle(a, b, c):
             return angle
 
 def _calc(geom):
+    """Helper function to calculate the angle of deviation between points.
+
+    Args:
+        geom (shapely.geometry.Polygon): Shapely polygon input.
+
+    Returns:
+        float: Mean angle deviation.
+    """    
     angles = []
     points = list(geom.exterior.coords)  # get points of a shape
     n_points = len(points)
