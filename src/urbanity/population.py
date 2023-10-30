@@ -134,6 +134,7 @@ def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary
     Args:
         raster_path (str): Filepath to a raster dataset (.tiff)
         chosen_band (int, optional): Selection of raster channel. Defaults to 1.
+        get_grid (bool, optional): If True, returns gridded GeoDataFrame, otherwise returns center points. Defaults to True.
         zoom (bool, optional): If True, reads only a windowed portion of large .tiff file. Requires `boundary` to be provided. Defaults to False. 
         boundary (gpd.GeoDataFrame, optional): Geographic boundary to specify window extent for raster filtering. Defaults to None. 
     Returns:

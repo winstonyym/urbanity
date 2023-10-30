@@ -541,6 +541,17 @@ def get_tile_geometry(gdf):
 
 
 def replace_nan_with_tile(map_1, map_2, target, node_id):
+    """Helper function to assign values from one tile to another.
+
+    Args:
+        map_1 (dict): Dictionary to set.
+        map_2 (dict): Dictionary containing tile ids and values.
+        target (str): Column with attributes.
+        node_id (str): Specifies the unique ID of nodes.
+
+    Returns:
+        float: Returns the target numerical value.
+    """    
     if np.isnan(target):
         try:
             return map_1[map_2[node_id]]
@@ -549,7 +560,8 @@ def replace_nan_with_tile(map_1, map_2, target, node_id):
     else:
         return target
     
-def dissolve_poly(filepath, name):
+    
+def dissolve_poly(gdf, name):
     """Function to help dissolve administrative subzones into one multipolygon
 
     Args:
@@ -559,10 +571,12 @@ def dissolve_poly(filepath, name):
     Returns:
         geopandas.GeoDataFrame: A aggregated dataframe object with merged subzones. 
     """    
-    df = gpd.read_file(filepath)
-    df[name] = name
-    df = df.dissolve(name).reset_index()
-    return df
+    if isinstance(gdf, str):
+        gdf = gpd.read_file(gdf)
+    
+    gdf[name] = name
+    gdf = gdf.dissolve(name).reset_index()
+    return gdf
 
 # data = {'GID': list(bogota['COD_LOC'].unique()), 
 #         'geometry': [boundary_generator(bogota, 'COD_LOC', i) for i in list(bogota['COD_LOC'].unique())]
@@ -614,3 +628,5 @@ def wkt_to_gpd(df):
     geom = df.geometry.apply(wkt.loads)
     gdf = gpd.GeoDataFrame(data = df, crs = 'epsg:4326', geometry=geom)
     return gdf
+
+

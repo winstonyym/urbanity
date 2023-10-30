@@ -145,3 +145,6 @@ data/
 examples/
 secrets/
 dist/
+
+# Experimental scripts
+src/urbanity/experimental.py

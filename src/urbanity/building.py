@@ -1,107 +1,78 @@
+# Import libraries
 import os
 import json
+import math
+import random
 import pyrosm
 import pandas as pd
+import shapely
+from shapely.geometry import Polygon, LineString
 from pyrosm import get_data
 import pkg_resources
 import numpy as np
 import geopandas as gpd
-from urbanity.geom import fill_and_expand, project_gdf
+from urbanity.geom import fill_and_expand, project_gdf, buffer_polygon
 
-def get_overture_buildings(location):
-    """Helper function to load Overture building footprints. Returns a GeoDataFrame with raw Overture building footprint data.
+def building_knn_nearest(gdf, knn=3):
+    """Helper function to generate nearest neighbours and distance for buildings.
 
     Args:
-        location (str): Specific city name to retrieve Overture building footprint data.
+        gdf (gpd.GeoDataFrame): A geopandas GeoDataFrame that consists of buildings footprints.
+        knn (int, optional): Returns the k-th nearest neighbours. Defaults to 3.
 
     Returns:
-        gpd.GeoDataFrame: A geopandas GeoDataFrame containing building footprints for the specified city. 
+        gpd.GeoDataFrame: A geopandas GeoDataFrame consisting of buildings and their nearest neighbours.
     """    
-    # Get Filepath to Building Data
-    overture_buildings_dl_path = pkg_resources.resource_filename('urbanity', 'overture_data/overture_building.json')
+    from scipy.spatial import cKDTree
     
-    # Load Overture Building Footprints
-    with open('../src/urbanity/overture_data/overture_building.json') as f:
-        overture_buildings = json.load(f)
+    nA = np.array(list(gdf['building_centroid'].apply(lambda x: (x.x, x.y))))
+    tree = cKDTree(nA)
+    dd, ii = tree.query(nA, k = list(range(2, knn+2)))
+
+    gdf[f'{knn}-nn-idx'] = list(ii)
+    gdf[f'{knn}-dist'] = list(dd)
+    
+    return gdf
+
+def compute_knn_aggregate(building_nodes, attr_cols):
+    """Helper function to compute aggregate mean and standard deviation for k-nearest neighbours.
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame that consists of buildings footprints.
+        attr_cols (list): List of columns that contain target attributes to generate knn aggregate statistics. 
+
+    Returns:
+        gpd.GeoDataFrame: A geopandas GeoDataFrame consisting of computed knn aggregate statistics.
+    """    
+
+    # Get knn index column
+    target_cols = []
+    for i in building_nodes.columns:
+        if 'nn-idx' in i:
+            target_cols.append(i)
+            
+    # For each attribute, create mapping dictionary {index: value}
+    for attr in attr_cols:
+        mapping_dict_attr = {k:v for k,v in zip(building_nodes.index, building_nodes[attr])}
         
-    overture_buildings_gdf = gpd.read_file(overture_buildings[f'{location.lower()}_buildings.geojson'])
+        for target_col in target_cols: 
+            mean_list = []
+            std_list = []
+            for list_idx in building_nodes[target_col]:
+                total = []
+                for i in list_idx:
+                    total.append(mapping_dict_attr[i])
+                mean_list.append(np.mean(total))
+                std_list.append(np.std(total, ddof=1))
+            df = pd.DataFrame({f'{target_col}_{attr}_mean':mean_list, f'{target_col}_{attr}_stdev':std_list})
+            building_nodes = gpd.GeoDataFrame(pd.concat([building_nodes,df],axis=1))
+            # building_nodes[f'{target_col}_{attr}_mean'] = mean_list
+            # building_nodes_attr[f'{target_col}_{attr}_stdev'] = std_list
     
-    return overture_buildings_gdf
-
-
-def get_osm_buildings(location = '', fp = '', boundary=None):
-    """Wrapper around pyrosm API to retrieve OpenStreetMap building footprints from Geofabrik. Optionally accepts a GeoDataFrame as bounding spatial extent.
-
-    Args:
-        location (str): Specfic country or city name to obtain OpenStreetMap data.
-        boundary (gpd.GeoDataFrame, optional): A GeoDataFrame corresponding to bounding spatial extent. Defaults to None.
-
-    Returns:
-        gpd.GeoDataFrame: A geopandas GeoDataFrame containing OSM building footprints for specified spatial extent.
-    """    
-    if os.path.exists('./data'):
-        pass
-    else:
-        os.makedirs('./data')
-
-    if isinstance(boundary, str):
-        bounding_box = gpd.read_file(boundary)
-
-    if fp == '' and location != '':
-        fp = get_data(location, directory = './data')
-        osm = pyrosm.OSM(fp, bounding_box=bounding_box.geometry.values[0])
-    elif fp == '' and location == '':
-        raise ValueError("Please specify a valid city or country name.")
-    else:
-        osm = pyrosm.OSM(fp, bounding_box=bounding_box.geometry.values[0])
-
-    osm_buildings = osm.get_buildings()
-    
-    return osm_buildings
-    
-
-def preprocess_overture_building_geometry(overture_buildings_gdf, minimum_area=30):
-    """Helper function to preprocess Overture building footprint data. The function first converts all geometry time to Polygons, 
-    checks the validity of each Polygon object, applies local projection, and removes buildings with area less than a specified minimum area.
-
-    Args:
-        overture_buildings_gdf (gpd.GeoDataFrame): A GeoDataFrame consisting of raw Overture building footprints.
-        minimum_area (int, optional): Area theshold for filtering. Buildings with area below minimum value will be filtered out. Defaults to 30.
-
-    Returns:
-        gpd.GeoDataFrame: A GeoDataFrame consisting of geometrically processed Overture building footprints.
-    """    
-    
-    # Remove linestrings, explode multipolygons, and remove invalid polygons
-    building_polygons = fill_and_expand(overture_buildings_gdf)
-    building_polygons = building_polygons[building_polygons.geometry.is_valid]
-
-    # Get total number of buildings
-    total_buildings = len(building_polygons)
-    print(f'Total number of buildings in overture-building-dataset is: {total_buildings}.')
-    
-    # Add overture prefix to all columns to facilitate spatial overlay operations (no duplicate key)
-    building_polygons.columns = ['overture_'+i if i!='geometry' else i for i in building_polygons.columns]
-    
-    # Locally project building polygons
-    building_proj = project_gdf(building_polygons)
-    
-    # Compute building footprint area
-    building_proj['overture_original_area'] = building_proj.geometry.area
-    
-    # Filter out buildings with footprint area less than 30 sqm
-    building_geom_gdf = building_proj[building_proj['overture_original_area'] >= minimum_area]
-    print(f'Removed {total_buildings - len(building_geom_gdf)} buildings with area less than {minimum_area} sqm.')
-    print(f'Resulting number of buildings in overture-building-dataset is: {len(building_geom_gdf)}.')
-    
-    # Reset index 
-    building_geom_gdf.index = range(len(building_geom_gdf))
-
-    return building_geom_gdf
-
+    return building_nodes
 
 def preprocess_osm_building_geometry(osm_buildings, minimum_area=30):
-    """Helper function to preprocess OSM building footprint data. The function first converts all geometry time to Polygons, 
+    """Experimental function. Helper function to preprocess OSM building footprint data. The function first converts all geometry time to Polygons, 
     checks the validity of each Polygon object, applies local projection, and removes buildings with area less than a specified minimum area.
 
     Args:
@@ -118,7 +89,7 @@ def preprocess_osm_building_geometry(osm_buildings, minimum_area=30):
     
     # Get total number of buildings
     total_buildings = len(building_polygons)
-    print(f'Total number of buildings in osm-building-dataset is: {total_buildings}.')
+    # print(f'Total number of buildings in osm-building-dataset is: {total_buildings}.')
     
     # Add prefix to all columns to facilitate spatial overlay operations (no duplicate key)
     building_polygons.columns = ['osm_'+i if i!='geometry' else i for i in building_polygons.columns]
@@ -131,574 +102,16 @@ def preprocess_osm_building_geometry(osm_buildings, minimum_area=30):
     
     # Filter out buildings with footprint area less than 30 sqm
     building_geom_gdf = building_proj[building_proj['osm_original_area'] >= minimum_area]
-    print(f'Removed {total_buildings - len(building_geom_gdf)} buildings with area less than {minimum_area} sqm.')
-    print(f'Resulting number of buildings in osm-building-dataset is: {len(building_geom_gdf)}.')
+    # print(f'Removed {total_buildings - len(building_geom_gdf)} buildings with area less than {minimum_area} sqm.')
+    # print(f'Resulting number of buildings in osm-building-dataset is: {len(building_geom_gdf)}.')
     
     # Reset index 
     building_geom_gdf.index = range(len(building_geom_gdf))
     
     return building_geom_gdf
 
-
-def preprocess_overture_building_attributes(building_geom_gdf, return_class_height=False):
-    """Helper function to preprocess Overture building attribute data. Replaces missing values with zero, and combines elevation data across columns.
-
-    Args:
-        building_geom_gdf (gpd.GeoDataFrame): A geopandas GeoDataframe of Overture building footprints.
-        return_class_height (bool, optional): If True, returns the mapping between building type and average floor height. 
-    Returns:
-        gpd.GeoDataFrame: A geopandas GeoDataframe with pre-processed building attributes information.
-    """    
-
-    # Create a building geodataframe copy
-    building_geom_gdf_nan = building_geom_gdf.copy()
-    
-    # Assign "0" value to height column with "None" and cast as float
-    building_geom_gdf_nan.loc[building_geom_gdf_nan["overture_height"].isna(), "overture_height"] = "0"
-    building_geom_gdf_nan['overture_height'] = building_geom_gdf_nan['overture_height'].astype(float)
-    
-    def get_level(row):
-        if '+' in row:
-            level = eval(row)
-        else:
-            level = row.split(',')[0]
-        return level
-
-    # Assign "0" value to level column with NaN and cast as float
-    building_geom_gdf_nan.loc[building_geom_gdf_nan["overture_level"].isna(), "overture_level"] = "0"
-    building_geom_gdf_nan['overture_level'] = building_geom_gdf_nan['overture_level'].astype(float)
-    
-    # Assign "0" value to level column with NaN and cast as float
-    building_geom_gdf_nan.loc[building_geom_gdf_nan["overture_numfloors"].isna(), "overture_numfloors"] = "0"
-    building_geom_gdf_nan['overture_numfloors'] = building_geom_gdf_nan['overture_numfloors'].astype(float)
-    
-    # Harmonise columns with level and numfloors information
-    def combine_level(level, numfloors):
-        if level == 0:
-            return numfloors
-        else:
-            return level
-        
-    building_geom_gdf_nan['overture_combined_level'] = building_geom_gdf_nan.apply(lambda row: combine_level(row['overture_level'], row['overture_numfloors']), axis=1)
-
-    # Remove underground buildings
-    building_geom_gdf_above_ground = building_geom_gdf_nan.copy()
-    building_geom_gdf_above_ground = building_geom_gdf_above_ground[building_geom_gdf_above_ground['overture_combined_level'] >= 0]
-    
-    # Get average height across building classes
-    class_list = [i for i in building_geom_gdf_above_ground['overture_class'].unique() if i!=None]
-    
-    average_class_height = {}
-    for building_class in class_list:
-        temp = building_geom_gdf_above_ground[(building_geom_gdf_above_ground['overture_class'] == building_class) & 
-                                              (building_geom_gdf_above_ground['overture_height']>0) & 
-                                              (building_geom_gdf_above_ground['overture_combined_level']>0)]
-        
-        average_class_height[building_class] = round((temp['overture_height'] / temp['overture_combined_level']).mean(),3)
-    
-    temp = building_geom_gdf_above_ground[(building_geom_gdf_above_ground['overture_height']>0) & 
-                                          (building_geom_gdf_above_ground['overture_combined_level']>0)]
-    
-    average_class_height['total'] = round((temp['overture_height'].sum() / temp['overture_combined_level'].sum()), 3)
-
-    # Harmonise columns with building height and combined_level information
-    def combine_height(height, combined_level, building_class):
-        if height!=0:
-            return height
-        
-        elif (combined_level!=0) and (building_class in class_list):
-            if np.isnan(average_class_height[building_class]):
-                multiplier = average_class_height['total']
-            else: 
-                multiplier = average_class_height[building_class]
-            return combined_level * multiplier
-    
-        elif (combined_level!=0) and (building_class not in class_list):
-            multiplier = average_class_height['total']
-            return combined_level * multiplier
-        
-        else:
-            return 0
-    
-    building_geom_gdf_above_ground['overture_combined_heights'] = building_geom_gdf_above_ground.apply(lambda row: combine_height(row['overture_height'], 
-                                                                                                                                   row['overture_combined_level'],
-                                                                                                                                   row['overture_class']), 
-                                                                                                                                   axis=1)
-    
-    
-    # Remove outbuildings class
-    building_geom_gdf_above_ground = building_geom_gdf_above_ground[building_geom_gdf_above_ground['overture_class'] != 'outbuilding']
-    
-    if return_class_height:
-        return building_geom_gdf_above_ground, average_class_height
-
-    return building_geom_gdf_above_ground
-
-
-def preprocess_osm_building_attributes(building_geom_gdf, return_class_height=False):
-    """Helper function to preprocess OSM building attribute data. Replaces missing values with zero, and combines elevation data across columns.
-
-    Args:
-        building_geom_gdf (gpd.GeoDataFrame): A geopandas GeoDataframe of OSM building footprints.
-        return_class_height (bool, optional): If True, returns the mapping between building type and average floor height. 
-
-    Returns:
-        gpd.GeoDataFrame: A geopandas GeoDataframe with pre-processed building attributes information.
-    """    
-    
-    # Create a building geodataframe copy
-    building_geom_gdf_nan = building_geom_gdf.copy()
-    
-    # Assign "0" value to height column with "None" and cast as float
-    building_geom_gdf_nan.loc[building_geom_gdf_nan["osm_height"].isna(), "osm_height"] = "0"
-    building_geom_gdf_nan['osm_height'] = building_geom_gdf_nan['osm_height'].astype(float)
-    
-    # If '+', mathematically evaluate. If multiple building levels, report highest. 
-    def get_level(row):
-        if '+' in row:
-            level = eval(row)
-        elif len(row) > 3:
-            level = max([float(i) for i in row.split(',')])
-        else:
-            level = row
-        return level
-
-    # Assign "0" value to level column with NaN and cast as float
-    building_geom_gdf_nan.loc[building_geom_gdf_nan["osm_building:levels"].isna(), "osm_building:levels"] = "0"
-    building_geom_gdf_nan['osm_building:levels'] = building_geom_gdf_nan['osm_building:levels'].apply(get_level)
-    building_geom_gdf_nan['osm_building:levels'] = building_geom_gdf_nan['osm_building:levels'].astype(float)
-
-    # Remove underground buildings
-    building_geom_gdf_above_ground = building_geom_gdf_nan.copy()
-    building_geom_gdf_above_ground = building_geom_gdf_above_ground[building_geom_gdf_above_ground['osm_building:levels'] >= 0]
-    
-    
-    # Get average height across building classes
-    cols = ['osm_building', 'osm_amenity', 'osm_building:use', 'osm_craft', 'osm_landuse', 'osm_office', 'osm_shop']
-    building_geom_gdf_above_ground[cols] = building_geom_gdf_above_ground[cols].astype('string')
-    building_geom_gdf_above_ground['osm_class'] = building_geom_gdf_above_ground[cols].apply(lambda row: '|'.join([i for i in row.values.astype(str) if i not in ['<NA>','yes']]), axis=1)
-    
-    # Generated with ChatGPT3.5. Text prompt: Please help to assign every element of the following list: <list> to one and only one categories in the following list: <list>. Each item should only be mapped on one category. Please return your response as a python dictionary. 
-    element_to_category = {
-    'train_station': 'transportation',
-    'civic': 'civic',
-    'mall': 'commercial',
-    'retail|mall': 'commercial',
-    'public|library': 'civic',
-    'public': 'civic',
-    'commercial': 'commercial',
-    'police': 'civic',
-    'office': 'commercial',
-    'place_of_worship': 'religious',
-    'fire_station': 'civic',
-    'industrial': 'industrial',
-    'electronics': 'industrial',
-    'supermarket': 'commercial',
-    'hospital': 'medical',
-    'apartments': 'residential',
-    'residential': 'residential',
-    'parking': 'transportation',
-    'retail': 'commercial',
-    'transportation': 'transportation',
-    'retail|fast_food': 'commercial',
-    'commercial|food_court': 'commercial',
-    'commercial|mall': 'commercial',
-    'hotel': 'commercial',
-    'office|diplomatic': 'commercial',
-    'house|government': 'civic',
-    'food_court': 'commercial',
-    'government': 'civic',
-    'garage|parking': 'transportation',
-    'company': 'commercial',
-    'office|company': 'commercial',
-    'library': 'civic',
-    'toilets': 'service',
-    'retail|food_court': 'commercial',
-    'fuel': 'service',
-    'university': 'education',
-    'bank': 'commercial',
-    'warehouse': 'industrial',
-    'social_facility': 'civic',
-    'hospital|hospital': 'medical',
-    'temple': 'religious',
-    'office|insurance': 'commercial',
-    'insurance': 'commercial',
-    'financial': 'commercial',
-    'conference_centre': 'civic',
-    'service': 'service',
-    'school|college': 'education',
-    'religion|place_of_worship': 'religious',
-    'car': 'transportation',
-    'warehouse|company': 'industrial',
-    'community_centre': 'civic',
-    'grandstand': 'entertainment',
-    'clinic': 'medical',
-    'greenhouse': 'agricultural',
-    'restaurant': 'entertainment',
-    'retail|restaurant': 'commercial',
-    'church|place_of_worship': 'religious',
-    'shelter': 'civic',
-    'it': 'service',
-    'retail|retail': 'commercial',
-    'retail|doctors|retail': 'commercial',
-    'retail|cafe': 'commercial',
-    'retail|ice_cream': 'commercial',
-    'retail|retail|furniture': 'commercial',
-    'retail|school': 'commercial',
-    'retail|pharmacy': 'commercial',
-    'retail|restaurant|retail': 'commercial',
-    'retail|optician': 'commercial',
-    'retail|school|retail': 'commercial',
-    'retail|pub|retail': 'commercial',
-    'retail|restaurant|retail|supermarket': 'commercial',
-    'retail|supermarket': 'commercial',
-    'retail|bank|retail': 'commercial',
-    'retail|fast_food|retail': 'commercial',
-    'retail|retail|hairdresser': 'commercial',
-    'retail|bar|retail': 'commercial',
-    'apartments|residential': 'residential',
-    'parking|carpark': 'transportation',
-    'parking|carpark;shops|mall': 'commercial',
-    'residential|residential': 'residential',
-    'roof': 'civic',
-    'parking|parking': 'transportation',
-    'residential;commercial': 'commercial',
-    'apartments|residential;commercial': 'commercial',
-    'residential;commercial|residential;commercial': 'commercial',
-    'school': 'education',
-    'roof|fuel': 'civic',
-    'mosque|place_of_worship': 'religious',
-    'parking|parking|carpark': 'transportation',
-    'fuel|convenience': 'service',
-    'reservoir': 'agricultural',
-    'college': 'education',
-    'hangar': 'industrial',
-    'commercial|residential': 'commercial',
-    'retail|residential': 'commercial',
-    'commercial|office': 'commercial',
-    'MRT': 'transportation',
-    'commercial|shophouses': 'commercial',
-    'marketplace': 'commercial',
-    'commercial|marketplace': 'commercial',
-    'commercial|general': 'commercial',
-    'public|community_centre': 'civic',
-    'sports_centre': 'entertainment',
-    'theatre': 'entertainment',
-    'church': 'religious',
-    'camera': 'entertainment',
-    'printing': 'service',
-    'fast_food': 'entertainment',
-    'public|cafe': 'civic',
-    'garage|parking|carpark': 'transportation',
-    'cafe': 'entertainment',
-    'nursing_home': 'medical',
-    'waste_transfer_station': 'service',
-    'office|bank': 'commercial',
-    'garage': 'industrial',
-    'public|place_of_worship': 'religious',
-    'public|shelter': 'civic',
-    'temple|place_of_worship': 'religious',
-    'childcare': 'civic',
-    'garage|waste_disposal': 'industrial',
-    'car_repair': 'industrial',
-    'estate_agent': 'commercial',
-    'music_school': 'education',
-    'public_building': 'civic',
-    'public|townhall': 'civic',
-    'public|food_court': 'civic',
-    'construction': 'industrial',
-    'industrial|company': 'industrial',
-    'retail|company': 'commercial',
-    'retail|furniture;electronics': 'commercial',
-    'kindergarten': 'education',
-    'motorcycle': 'transportation',
-    'paint': 'industrial',
-    'tyres': 'industrial',
-    'manufacture': 'industrial',
-    'commercial|company': 'commercial',
-    'boathouse': 'entertainment',
-    'dormitory': 'residential',
-    'apartments|parking': 'residential',
-    'commercial|car': 'commercial',
-    'storage_rental': 'commercial',
-    'parking_space': 'transportation',
-    'office|telecommunication': 'commercial',
-    'arts_centre': 'entertainment',
-    'education': 'education',
-    'roof|shelter': 'civic',
-    'public|marketplace': 'civic',
-    'pub': 'entertainment',
-    'house': 'residential',
-    'waste_disposal': 'service',
-    'sports_centre|public_building': 'entertainment',
-    'office|mall': 'commercial',
-    'public|ferry_terminal': 'civic',
-    'retail|parking|mall': 'commercial',
-    'roof|place_of_worship': 'civic',
-    'terrace': 'residential',
-    'convenience': 'service',
-    'semidetached_house': 'residential',
-    'residential|atm': 'residential',
-    'residential|construction': 'residential',
-    'chapel|place_of_worship': 'religious',
-    'religious': 'religious',
-    'roof|theatre': 'civic',
-    'ruins': 'civic',
-    'commercial|furniture': 'commercial',
-    'roof|fuel|convenience': 'civic',
-    'hospital|social_facility': 'medical',
-    'residential|parking': 'residential',
-    'diplomatic': 'civic',
-    'metal_construction': 'industrial',
-    'bakery': 'industrial',
-    'retail|bicycle': 'commercial',
-    'furniture': 'industrial',
-    'educational_institution': 'education',
-    'detached': 'residential',
-    'commercial|restaurant': 'commercial',
-    'religious|place_of_worship': 'religious',
-    'swimming_pool_changing_room|dressing_room': 'entertainment',
-    'clubhouse': 'entertainment',
-    'club house': 'entertainment',
-    'car_wash': 'industrial',
-    'civic|community_centre': 'civic',
-    'driving_school': 'education',
-    'bus_station': 'transportation',
-    'ferry_terminal': 'transportation',
-    'cinema': 'entertainment',
-    'winter_sports': 'entertainment',
-    'mobile_phone': 'commercial',
-    'jewelry': 'commercial',
-    'pawnbroker': 'commercial',
-    'retail|restaurant|caterer': 'commercial',
-    'beauty': 'entertainment',
-    'clothes': 'commercial',
-    'toys': 'commercial',
-    'frame': 'industrial',
-    'fabric': 'industrial',
-    'money_lender': 'commercial',
-    'doctors': 'medical',
-    'retail|pub': 'commercial',
-    'pottery': 'industrial',
-    'bar': 'entertainment',
-    'gift': 'commercial',
-    'travel_agency': 'commercial',
-    'car_parts': 'industrial',
-    'craft': 'industrial',
-    'hairdresser': 'entertainment',
-    'residential|social_facility': 'residential',
-    'condominium': 'residential',
-    'residential|variety_store': 'residential',
-    'monastery': 'religious',
-    'parlour': 'commercial',
-    'variety_store': 'commercial',
-    'public|waste_disposal': 'service',
-    'commercial|car_repair': 'commercial',
-    'mix_used|parking': 'transportation',
-    'books': 'education',
-    'warehouse|storage_rental': 'industrial',
-    'retail|florist': 'commercial',
-    'hvac': 'industrial',
-    'kindergarten|kindergarten': 'education',
-    'shop': 'commercial',
-    'service|telecommunication': 'service',
-    'electrical': 'industrial',
-    'energy_supplier': 'industrial',
-    'mosque': 'religious',
-    'commercial|fuel': 'commercial',
-    'Lucasfilm': 'entertainment',
-    'commercial|commercial|mall': 'commercial',
-    'industrial|waste_transfer_station': 'industrial',
-    'retail|convenience': 'commercial',
-    'detached|diplomatic': 'residential',
-    'interior_decoration': 'commercial',
-    'military': 'civic',
-    'retail|marketplace': 'commercial',
-    'residential|waste_transfer_station': 'residential',
-    'office|hospital': 'medical',
-    'shed': 'industrial',
-    'stable': 'agricultural',
-    'crematorium': 'religious',
-    'residential|college': 'education',
-    'gazebo|shelter': 'civic',
-    'residential|place_of_worship': 'religious',
-    'meadow': 'agricultural',
-    'post_office': 'civic',
-    'CET_Campus_East': 'education',
-    'roof|community_centre': 'civic',
-    'pet': 'agricultural',
-    'restaurant|wine': 'entertainment',
-    'foundation': 'civic',
-    'veterinary': 'medical',
-    'winery': 'agricultural',
-    'commercial|bank': 'commercial',
-    'industrial|furniture': 'industrial',
-    'apartments|mall': 'residential',
-    'retail|pub|brewery': 'commercial',
-    'wayside_shrine': 'religious',
-    'retail|dentist': 'commercial',
-    'EiS_Residences': 'residential',
-    'studio': 'entertainment',
-    'school|school': 'education',
-    'residential|nursing_home': 'residential',
-    'alcohol': 'entertainment',
-    'herbalist': 'commercial',
-    'research': 'education',
-    'roof|mall': 'civic',
-    'shop|fuel': 'commercial',
-    'telecommunication': 'service',
-    'medical': 'medical',
-    'car_rental': 'transportation',
-    'stadium': 'entertainment',
-    'ice_cream': 'entertainment',
-    'garage|parking_space': 'transportation',
-    'industrial|vehicle_inspection': 'industrial',
-    'train_station|mall': 'transportation',
-    'IMM|parking': 'transportation',
-    'government|community_centre': 'civic',
-    'farm_auxiliary': 'agricultural',
-    'greengrocer': 'agricultural',
-    'shrine': 'religious',
-    'engineering': 'industrial',
-    'civic|second_hand': 'civic',
-    'Temple_Chinese': 'religious',
-    'school|educational_institution': 'education',
-    'school|place_of_worship': 'religious',
-    'semidetached_house|residential': 'residential',
-    'hut': 'agricultural',
-    'security': 'civic',
-    'administration': 'civic',
-    'bungalow': 'residential',
-    'residential|childcare': 'residential',
-    'sports_hall': 'entertainment',
-    'charity': 'civic',
-    'retail|fuel': 'commercial',
-    'hall': 'civic',
-    'social_centre': 'civic',
-    'ngo': 'civic',
-    'carport': 'residential',
-    'retail|plant_nursery|garden_centre': 'commercial',
-    'retail|garden_centre': 'commercial',
-    'house|diplomatic': 'residential',
-    'terrace|kindergarten': 'residential',
-    'retail|gardener': 'commercial',
-    'house|bar': 'residential',
-    'fishing': 'agricultural',
-    'language_school|educational_institution': 'education',
-    'service|waste_transfer_station': 'service',
-    'commercial|builder': 'commercial',
-    'grocery': 'commercial',
-    'industrial|engineering': 'industrial',
-    'funeral_directors': 'religious',
-    'toilets|toilets': 'service',
-    'commercial|place_of_worship': 'religious',
-    'commercial|car_parts': 'commercial',
-    'commercial|studio': 'commercial',
-    'commercial|pub': 'commercial',
-    'garden_centre': 'agricultural',
-    'university|library': 'education',
-    'retail|educational_institution': 'commercial',
-    'retail|car_repair': 'commercial',
-    'watches': 'commercial',
-    'commercial|lighting': 'commercial',
-    'bathroom_furnishing': 'commercial',
-    'hardware': 'industrial',
-    'retail|beauty': 'commercial',
-    'retail|parking': 'commercial',
-    'public|toilets': 'civic',
-    'multi-purpose_stage': 'entertainment',
-    'no|community_centre': 'civic',
-    'government|government': 'civic',
-    'industrial|logistics': 'industrial',
-    'commercial|community_centre': 'commercial',
-    'pavilion|shelter': 'civic',
-    'gateway': 'civic',
-    'seasonal|theatre': 'entertainment',
-    'hut|shelter': 'civic',
-    'residential|shelter': 'residential',
-    'pavilion': 'civic',
-    'detached|kindergarten': 'residential',
-    'office|consulting': 'commercial',
-    'construction|parking': 'industrial',
-    'lighting': 'industrial',
-    'events_venue': 'entertainment',
-    'garages': 'industrial',
-    'bag': 'commercial',
-    'yes;retail|mall': 'commercial',
-    'animal_boarding': 'agricultural',
-    'public|events_venue': 'civic',
-    'bicycle_parking': 'transportation',
-    'taxi': 'transportation',
-    'commercial|bar': 'commercial',
-    'retail|commercial': 'commercial',
-    'transportation|bus_station': 'transportation',
-    'bridge': 'transportation',
-    'chapel': 'religious',
-    'no|construction': 'industrial',
-    'jtc_nanospace': 'industrial',
-    'shed|security': 'industrial',
-    'multi-purpose_hall|events_venue': 'entertainment',
-    'tent': 'civic',
-    'industrial|mall': 'industrial',
-    'yes;industrial': 'industrial',
-    'garage|mall': 'industrial',
-    'recreation_ground': 'entertainment',
-    'office|police': 'civic',
-    'public|government': 'civic',
-    'public|clinic': 'civic',
-    '':None
-    }
-    
-    building_geom_gdf_above_ground=building_geom_gdf_above_ground.replace({"osm_class": element_to_category})
-    
-    # Get average height across building classes
-    class_list = [i for i in building_geom_gdf_above_ground['osm_class'].unique() if i!=None]
-    
-    average_class_height = {}
-    for building_class in class_list:
-        temp = building_geom_gdf_above_ground[(building_geom_gdf_above_ground['osm_class'] == building_class) & 
-                                              (building_geom_gdf_above_ground['osm_height']>0) & 
-                                              (building_geom_gdf_above_ground['osm_building:levels']>0)]
-        
-        average_class_height[building_class] = round((temp['osm_height'] / temp['osm_building:levels']).mean(),3)
-    
-    temp = building_geom_gdf_above_ground[(building_geom_gdf_above_ground['osm_height']>0) & 
-                                          (building_geom_gdf_above_ground['osm_building:levels']>0)]
-    
-    average_class_height['total'] = round((temp['osm_height'].sum() / temp['osm_building:levels'].sum()), 3)
-
-    # Harmonise columns with building height and combined_level information
-    def combine_height(height, combined_level, building_class):
-        if height!=0:
-            return height
-        
-        elif (combined_level!=0) and (building_class in class_list):
-            if np.isnan(average_class_height[building_class]):
-                multiplier = average_class_height['total']
-            else: 
-                multiplier = average_class_height[building_class]
-            return combined_level * multiplier
-    
-        elif (combined_level!=0) and (building_class not in class_list):
-            multiplier = average_class_height['total']
-            return combined_level * multiplier
-        
-        else:
-            return 0
-    
-    building_geom_gdf_above_ground['osm_combined_heights'] = building_geom_gdf_above_ground.apply(lambda row: combine_height(row['osm_height'], 
-                                                                                                                                   row['osm_building:levels'],
-                                                                                                                                   row['osm_class']), 
-                                                                                                                                   axis=1)
-    
-    if return_class_height:
-        return building_geom_gdf_above_ground, average_class_height
-
-    return building_geom_gdf_above_ground
-
-
 def assign_numerical_id_suffix(gdf, prefix):
-    """Helper function to assign unique building ids to building footprints. Items with duplicate ids are assigned suffixes corresponding to their count "_(count)". 
+    """Experimental function. Helper function to assign unique building ids to building footprints. Items with duplicate ids are assigned suffixes corresponding to their count "_(count)". 
     For example, if two building polygons have the id: 12093210, the first will be renamed to 12093210_1 and second to 12093210_2.
 
     Args:
@@ -722,90 +135,601 @@ def assign_numerical_id_suffix(gdf, prefix):
     return modified_gdf
 
 
-def merge_osm_to_overture_footprints(overture_buildings_attr_uids, osm_attr_uids):
-    """Helper function to harmonise OSM and Overture building footprint data. First, the geometric difference between both sets of building footprints are computed. Using Overture as the base, missing buildings from OSM are then systematically added to the Overture set.
-    The function automatically harmonises column names and computes the unprojected global bounding box coordinates for OSM buildings. 
+# The following code sections for building morphology attribute computation have been adapted from the Momepy Python Package at: https://github.com/pysal/momepy. It has been wrapped into Urbanity in such a manner for convenience, since directly importing momepy created to geospatial dependency issues. 
+# Copyright (c) 2018-2021, Martin Fleischmann and PySAL Developers. All rights reserved. 
+_MULTIPLICATIVE_EPSILON = 1 + 1e-14
+
+def compute_complexity(building_nodes, element = 'building'):
+    """Wrapper function to compute complexity for each building polygons from momepy: https://github.com/pysal/momepy. Based on Kevin McGarigal and Barbara J Marks. FRAGSTATS: Spatial Pattern Analysis Program for Quantifying Landscape Structure. Volume 351. US Department of Agriculture, Forest Service, Pacific Northwest Research Station, Portland, OR, 1995. doi:10.2737/PNW-GTR-351.
 
     Args:
-        overture_buildings_attr_uids (gpd.GeoDataFrame): GeoDataFrame consisting of Overture building footprints with unique ids and pre-processed geometry and attributes. 
-        osm_attr_uids (gpd.GeoDataFrame): GeoDataFrame consisting of OSM building footprints with unique ids and pre-processed geometry and attributes.
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
 
     Returns:
-        gpd.GeoDataFrame: Returns a harmonised building footprint dataset with missing building footprints from OSM dataset added to the Overture dataset.
-    """    
-    
-    # Extract footprints that are part of osm but not part of overture
-    buildings_diff_osm = osm_attr_uids.overlay(overture_buildings_attr_uids, how='difference')
-    buildings_diff_osm['osm_difference_area'] = buildings_diff_osm.geometry.area
-    buildings_diff_osm['osm_proportion_not_covered'] = round(buildings_diff_osm['osm_difference_area'] / buildings_diff_osm['osm_original_area'] * 100, 3)
-    
-    # From proportion area, extract OSM buildings which are totally missing from Overture 
-    osm_only_buildings = buildings_diff_osm.copy()
-    osm_only_buildings = osm_only_buildings[osm_only_buildings['osm_proportion_not_covered'] == 100]
-    
-    # Project to global coordinate to get footprint bounding box
-    osm_only_buildings_epsg4326 = osm_only_buildings.copy()
-    osm_only_buildings_epsg4326 = osm_only_buildings_epsg4326.to_crs('epsg:4326')
-    
-    # Apply function to rows to extract bounding box
-    def get_bbox_dict(minx, maxx, miny, maxy):
-        return {'minx':minx, 'maxx':maxx, 'miny':miny, 'maxy':maxy}
-    osm_only_buildings['osm_bbox'] = osm_only_buildings_epsg4326.geometry.bounds.apply(lambda row: get_bbox_dict(row['minx'], 
-                                                                                                                 row['maxx'], 
-                                                                                                                 row['miny'], 
-                                                                                                                 row['maxy']), 
-                                                                                       axis=1)
-    
-    # Select common columns between both datasets
-    selected_overture = overture_buildings_attr_uids[['overture_id', 'overture_names', 'overture_class', 'overture_combined_level', 
-                                                      'overture_combined_heights', 'overture_original_area', 'overture_bbox', 'geometry']]
-    
-    selected_osm = osm_only_buildings[['osm_id', 'osm_name', 'osm_class', 'osm_building:levels', 'osm_combined_heights', 'osm_original_area', 
-                                       'osm_bbox', 'geometry']]
-    
-    col_names = ['building_id', 'building_names', 'building_class', 'building_level', 'building_height', 'building_area', 'building_bbox', 'geometry']
-    selected_osm.columns = col_names
-    selected_overture.columns = col_names
-    
-    merged_gdf = gpd.GeoDataFrame(pd.concat([selected_overture, selected_osm], ignore_index=True, axis=0))
-    
-    return merged_gdf
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for footprint complexity attribute added. 
+    """  
+    building_nodes[f'{element}_complexity'] = building_nodes[f'{element}_perimeter'] / np.sqrt(np.sqrt(building_nodes[f'{element}_area']))
+
+    return building_nodes
 
 
-def extract_attributed_osm_buildings(merged_gdf, osm_attr_uids, column = 'osm_combined_heights', threshold = 50):
-    """Checks OSM building dataset for available building height data and adds it to the combined (Overture+OSM) dataset where building height data is unavailable.
+def compute_squareness(building_nodes, element = 'building'):
+    """Wrapper function to compute squareness for each building polygons from momepy: https://github.com/pysal/momepy. Based on Kevin McGarigal and Barbara J Marks. FRAGSTATS: Spatial Pattern Analysis Program for Quantifying Landscape Structure. Volume 351. US Department of Agriculture, Forest Service, Pacific Northwest Research Station, Portland, OR, 1995. doi:10.2737/PNW-GTR-351.
 
     Args:
-        merged_gdf (gpd.GeoDataFrame): Harmonised building footprint dataset with both OSM and Overture building footprints.
-        osm_attr_uids (gpd.GeoDataFrame): GeoDataFrame consisting of OSM building footprints with unique ids and pre-processed geometry and attributes.
-        column (str, optional): Specifies the column to check for building attribute data. Defaults to 'osm_combined_heights'.
-        threshold (int, optional): Determines the proportion of geometric overlap in building footprint to consider correspondance. Defaults to 50.
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
 
     Returns:
-        gpd.GeoDataFrame: Returns building footprint dataset augmented with additional building semantic attribute.
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for footprint squareness attribute added. 
+    """  
+    results_list = []
+    # fill new column with the value of area, iterating over rows one by one
+    for geom in building_nodes.geometry:
+        if geom.geom_type == "Polygon" or (
+            geom.geom_type == "MultiPolygon" and len(geom.geoms) == 1
+        ):
+            # unpack multis with single geoms
+            if geom.geom_type == "MultiPolygon":
+                geom = geom.geoms[0]
+            results_list.append(_calc(geom))
+        else:
+            results_list.append(np.nan)
+
+    building_nodes[f'{element}_squareness'] = results_list
+    return building_nodes
+
+def compute_shape_index(building_nodes, element = 'building'):
+    """Wrapper function to compute shape index for each building polygons from momepy: https://github.com/pysal/momepy. Based on Kevin McGarigal and Barbara J Marks. FRAGSTATS: Spatial Pattern Analysis Program for Quantifying Landscape Structure. Volume 351. US Department of Agriculture, Forest Service, Pacific Northwest Research Station, Portland, OR, 1995. doi:10.2737/PNW-GTR-351.
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for footprint shape index attribute added. 
+    """  
+    building_nodes[f'{element}_shape_idx'] = np.sqrt((building_nodes[f'{element}_area']/math.pi))/(0.5 * building_nodes[f'{element}_orientation'])
+
+    return building_nodes
+
+def compute_square_compactness(building_nodes, element = 'building'):
+    """Wrapper function to compute square compactness for each building polygons from momepy: https://github.com/pysal/momepy. Based on Kevin McGarigal and Barbara J Marks. FRAGSTATS: Spatial Pattern Analysis Program for Quantifying Landscape Structure. Volume 351. US Department of Agriculture, Forest Service, Pacific Northwest Research Station, Portland, OR, 1995. doi:10.2737/PNW-GTR-351.
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for footprint square compactness attribute added. 
+    """  
+
+    building_nodes[f'{element}_square_compactness'] = ((4 * np.sqrt(building_nodes[f'{element}_area'])) / building_nodes[f'{element}_perimeter'])**2
+
+
+    return building_nodes
+
+
+def compute_rectangularity(building_nodes, element = 'building'):
+    """Wrapper function to compute rectangularity for each building polygons from momepy: https://github.com/pysal/momepy. Based on Kevin McGarigal and Barbara J Marks. FRAGSTATS: Spatial Pattern Analysis Program for Quantifying Landscape Structure. Volume 351. US Department of Agriculture, Forest Service, Pacific Northwest Research Station, Portland, OR, 1995. doi:10.2737/PNW-GTR-351.
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for footprint rectangularity attribute added. 
+    """  
+
+    mbr_list = get_minimum_bounding_rectangle(building_nodes)
+    area_list = [i.area for i in mbr_list]
+    building_nodes[f'{element}_rectangularity'] = building_nodes[f'{element}_area'] / area_list
+
+    return building_nodes
+
+
+def compute_fractaldim(building_nodes, element = 'building'):
+    """Wrapper function to compute fractal dimension for each building polygons from momepy: https://github.com/pysal/momepy. Based on Kevin McGarigal and Barbara J Marks. FRAGSTATS: Spatial Pattern Analysis Program for Quantifying Landscape Structure. Volume 351. US Department of Agriculture, Forest Service, Pacific Northwest Research Station, Portland, OR, 1995. doi:10.2737/PNW-GTR-351.
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for footprint fractal dimension attribute added. 
+    """  
+
+    building_nodes[f'{element}_fractaldim'] = (2 * np.log(building_nodes[f'{element}_perimeter'] / 4)) / np.log(building_nodes[f'{element}_area'])
+
+    return building_nodes
+
+
+def compute_equivalent_rectangular_index(building_nodes, element = 'building'):
+    """Wrapper function to compute equivalent rectangular index for each building polygons from momepy: https://github.com/pysal/momepy. Based on Melih Basaraner and Sinan Cetinkaya. Performance of shape indices and classification schemes for characterising perceptual shape complexity of building footprints in GIS. International Journal of Geographical Information Science, 31(10):1952–1977, July 2017. doi:10.1080/13658816.2017.1346257.
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for footprint equivalent rectangular index attribute added. 
+    """  
+
+    mbr_list = get_minimum_bounding_rectangle(building_nodes)
+    building_nodes[f'{element}_eri'] = np.sqrt(building_nodes[f'{element}_area'] / [i.area for i in mbr_list]) * ([i.length for i in mbr_list] / building_nodes[f'{element}_perimeter'])
+    return building_nodes
+
+
+def compute_longest_axis_length(building_nodes, element = 'building'):
+    """Wrapper function to compute longest axis length for each building polygons from momepy: https://github.com/pysal/momepy. Axis is defined as a diameter of minimal circumscribed circle around the convex hull. It does not have to be fully inside an object.
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attribute. 
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for footprint longest axis length attribute added. 
+    """  
+    hulls = building_nodes.convex_hull.exterior
+    diameter = hulls.apply(lambda g: _circle_radius(list(g.coords))) * 2
+    building_nodes[f'{element}_longest_axis_length'] = diameter
+
+    return building_nodes
+    
+def compute_shared_wall_ratio(building_nodes, element = 'building'):
+    """Wrapper function to compute shared wall length and ratio for each building polygons from momepy: https://github.com/pysal/momepy. From: Rachid Hamaina, Thomas Leduc, and Guillaume Moreau. Towards Urban Fabrics Characterization Based on Buildings Footprints. In Bridging the Geographic Information Sciences, volume 2, pages 327–346. Springer, Berlin, Heidelberg, January 2012. doi:10.1007/978-3-642-29063-3_18.
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for footprint shared wall length and ratio attribute added. 
+    """  
+    inp, res = building_nodes.sindex.query_bulk(building_nodes.geometry, predicate="intersects")
+    left = building_nodes.geometry.take(inp).reset_index(drop=True)
+    right = building_nodes.geometry.take(res).reset_index(drop=True)
+    intersections = left.intersection(right).length
+    results = intersections.groupby(inp).sum().reset_index(
+        drop=True
+    ) - building_nodes.geometry.length.reset_index(drop=True)
+
+    building_nodes[f'{element}_swl'] = results
+    building_nodes[f'{element}_swl_ratio'] = building_nodes[f'{element}_swl'] / building_nodes[f'{element}_perimeter']
+
+    return building_nodes
+
+
+def compute_orientation(building_nodes, element = 'building'):
+    """Wrapper function to compute orientation for each building polygons from momepy: https://github.com/pysal/momepy. Here 'orientation' is defined as an orientation of the
+    longest axis of bounding rectangle in range 0 - 45. The orientation of LineStrings is represented by the orientation of the line connecting the first and the last point of the segment.
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for footprint orientation attribute added. 
+    """  
+    results_list = []
+    mbr_list = get_minimum_bounding_rectangle(building_nodes)
+
+    for geom, bbox in zip(building_nodes.geometry, mbr_list):
+        if geom.geom_type in ["Polygon", "MultiPolygon", "LinearRing"]:
+            bbox = bbox.exterior.coords
+            axis1 = _dist(bbox[0], bbox[3])
+            axis2 = _dist(bbox[0], bbox[1])
+
+            if axis1 <= axis2:
+                az = _azimuth(bbox[0], bbox[1])
+            else:
+                az = _azimuth(bbox[0], bbox[3])
+        elif geom.geom_type in ["LineString", "MultiLineString"]:
+            coords = geom.exterior.coords
+            az = _azimuth(coords[0], coords[-1])
+        else:
+            results_list.append(np.nan)
+            continue
+
+        results_list.append(az)
+
+    # get a deviation from cardinal directions
+    results = np.abs((np.array(results_list, dtype=float) + 45) % 90 - 45)
+    building_nodes[f'{element}_orientation'] = results
+
+    return building_nodes
+
+def compute_elongation(building_nodes, element = 'building'):
+    """Wrapper function to compute elongation for each building polygons from momepy: https://github.com/pysal/momepy
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for footprint elongation attribute added. 
+    """  
+    # Get mbr from building footprints
+    mbr_list = get_minimum_bounding_rectangle(building_nodes)
+
+    # Formula based on Jorge Gil, Nuno Montenegro, J N Beirão, and J P Duarte. On the Discovery of Urban Typologies: Data Mining the Multi-dimensional Character of Neighbourhoods. Urban Morphology, 16(1):27–40, January 2012.
+    a_list = [i.area for i in mbr_list]
+    p_list = [k.length for k in mbr_list]
+    a_array = np.array(a_list)
+    p_array = np.array(p_list)
+    cond1 = p_array ** 2
+    cond2 = a_array * 16
+    bigger = cond1 >= cond2
+    sqrt = np.empty(len(a_array))
+    sqrt[bigger] = cond1[bigger] - cond2[bigger]
+    sqrt[~bigger] = 0
+
+    # calculate both width/length and length/width
+    elo1 = ((p_array - np.sqrt(sqrt)) / 4) / ((p_array / 2) - ((p_array - np.sqrt(sqrt)) / 4))
+    elo2 = ((p_array + np.sqrt(sqrt)) / 4) / ((p_array / 2) - ((p_array + np.sqrt(sqrt)) / 4))
+
+    # use the smaller one (e.g. shorter/longer)
+    res = np.empty(len(a_array))
+    res[elo1 <= elo2] = elo1[elo1 <= elo2]
+    res[~(elo1 <= elo2)] = elo2[~(elo1 <= elo2)]
+
+    building_nodes[f'{element}_elongation'] = res
+
+    return building_nodes
+
+def compute_corners(building_nodes, element = 'building'):
+    """Wrapper function to compute number of corners for each building polygons from momepy: https://github.com/pysal/momepy
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for number of corners attribute added. 
+    """  
+    results_list = [] 
+    # fill new column with the value of area, iterating over rows one by one
+    for geom in building_nodes.geometry:
+        if geom.geom_type == "Polygon":
+            corners = 0  # define empty variables
+            points = list(geom.exterior.coords)  # get points of a shape
+            stop = len(points) - 1  # define where to stop
+            for i in np.arange(
+                len(points)
+            ):  # for every point, calculate angle and add 1 if True angle
+                if i == 0:
+                    continue
+                elif i == stop:
+                    a = np.asarray(points[i - 1])
+                    b = np.asarray(points[i])
+                    c = np.asarray(points[1])
+
+                    if _true_angle(a, b, c) is True:
+                        corners = corners + 1
+                    else:
+                        continue
+
+                else:
+                    a = np.asarray(points[i - 1])
+                    b = np.asarray(points[i])
+                    c = np.asarray(points[i + 1])
+
+                    if _true_angle(a, b, c) is True:
+                        corners = corners + 1
+                    else:
+                        continue
+        elif geom.geom_type == "MultiPolygon":
+            corners = 0  # define empty variables
+            for g in geom.geoms:
+                points = list(g.exterior.coords)  # get points of a shape
+                stop = len(points) - 1  # define where to stop
+                for i in np.arange(
+                    len(points)
+                ):  # for every point, calculate angle and add 1 if True angle
+                    if i == 0:
+                        continue
+                    elif i == stop:
+                        a = np.asarray(points[i - 1])
+                        b = np.asarray(points[i])
+                        c = np.asarray(points[1])
+
+                        if _true_angle(a, b, c) is True:
+                            corners = corners + 1
+                        else:
+                            continue
+
+                    else:
+                        a = np.asarray(points[i - 1])
+                        b = np.asarray(points[i])
+                        c = np.asarray(points[i + 1])
+
+                        if _true_angle(a, b, c) is True:
+                            corners = corners + 1
+                        else:
+                            continue
+        else:
+            corners = np.nan
+
+        results_list.append(corners)
+    
+    building_nodes[f'{element}_corners'] = results_list
+
+    return building_nodes
+
+def compute_convexity(building_nodes, element = 'building'):
+    """Wrapper function to compute convexity metric building polygons from momepy: https://github.com/pysal/momepy
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for convexity attribute added. 
+    """  
+    building_nodes[f'{element}_convexity'] = building_nodes[f'{element}_area'] / building_nodes.convex_hull.area
+    return building_nodes
+
+def compute_circularcompactness(building_nodes, element = 'building'):
+    """Wrapper function to compute circular compactness of building polygons from momepy: https://github.com/pysal/momepy
+
+    Args:
+        building_nodes (gpd.GeoDataFrame): A geopandas GeoDataFrame which consists of building polygons and their computed attributes. 
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for Circular Compactness attribute added. 
+    """   
+    hull = building_nodes.convex_hull.exterior
+    radius = hull.apply(
+            lambda g: _circle_radius(list(g.coords)) if g is not None else None
+        )
+    building_nodes[f'{element}_circ_compact'] = building_nodes[f'{element}_area'] / (np.pi * radius**2)
+    return building_nodes
+
+
+def _circle_radius(points): 
+    """Helper function to generate geometric circles from points. 
+
+    Args:
+        points (list): A list of shapely Point objects.
+
+    Returns:
+        list: List of shapely Polygons corresponding to circles around points. 
     """    
-    
-    # Get all OSM buildings with target information
-    osm_buildings_with_info = osm_attr_uids.copy()
-    osm_buildings_with_info = osm_buildings_with_info[osm_buildings_with_info[column] > 0]
-    
-    # Determine proportion of geometric intersection with buildings dataset
-    building_intersection = merged_gdf.overlay(osm_buildings_with_info)
-    building_intersection['overlapping_area'] = building_intersection.geometry.area
-    building_intersection['proportion_overlapping_area'] = round(building_intersection['overlapping_area'] / building_intersection['building_area'] * 100, 3)
-    
-    # Filter based on threshold
-    thresholded_buildings = building_intersection[(building_intersection['proportion_overlapping_area'] > threshold) & (building_intersection['building_height'] == 0)]
+    if len(points[0]) == 3:
+        points = [x[:2] for x in points]
+    circ = _make_circle(points)
+    return circ[2]
 
-    # Add attribute information to merged_gdf
-    columns_to_merge = thresholded_buildings.copy()
-    columns_to_merge = thresholded_buildings[['building_id', column]]
-    
-    # Make copy
-    combined_with_height = merged_gdf.copy()
+def _make_circle(points):
+    # Convert to float and randomize order
+    shuffled = [(float(x), float(y)) for (x, y) in points]
+    random.shuffle(shuffled)
 
-    # Add height attribute
-    for building_id, osm_height in zip(columns_to_merge['building_id'], columns_to_merge[column]):
-        combined_with_height.loc[combined_with_height['building_id'] == building_id, 'building_height'] = osm_height
+    # Progressively add points to circle or recompute circle
+    c = None
+    for i, p in enumerate(shuffled):
+        if c is None or not _is_in_circle(c, p):
+            c = _make_circle_one_point(shuffled[: i + 1], p)
+    return c
+
+def _make_circle_one_point(points, p):
+    """One boundary point known."""
+    c = (p[0], p[1], 0)
+    for i, q in enumerate(points):
+        if not _is_in_circle(c, q):
+            if c[2] == 0:
+                c = _make_diameter(p, q)
+            else:
+                c = _make_circle_two_points(points[: i + 1], p, q)
+    return c
+
+def _make_circle_two_points(points, p, q):
+    """Two boundary points known."""
+    circ = _make_diameter(p, q)
+    left = None
+    right = None
+    px, py = p
+    qx, qy = q
+
+    # For each point not in the two-point circle
+    for r in points:
+        if _is_in_circle(circ, r):
+            continue
+
+        # Form a circumcircle and classify it on left or right side
+        cross = _cross_product(px, py, qx, qy, r[0], r[1])
+        c = _make_circumcircle(p, q, r)
+        if c is None:
+            continue
+        elif cross > 0 and (
+            left is None
+            or _cross_product(px, py, qx, qy, c[0], c[1])
+            > _cross_product(px, py, qx, qy, left[0], left[1])
+        ):
+            left = c
+        elif cross < 0 and (
+            right is None
+            or _cross_product(px, py, qx, qy, c[0], c[1])
+            < _cross_product(px, py, qx, qy, right[0], right[1])
+        ):
+            right = c
+
+    # Select which circle to return
+    if left is None and right is None:
+        return circ
+    if left is None:
+        return right
+    if right is None:
+        return left
+    if left[2] <= right[2]:
+        return left
+    return right
+
+
+def _make_circumcircle(p0, p1, p2):
+    """Mathematical algorithm from Wikipedia: Circumscribed circle."""
+    ax, ay = p0
+    bx, by = p1
+    cx, cy = p2
+    ox = (min(ax, bx, cx) + max(ax, bx, cx)) / 2
+    oy = (min(ay, by, cy) + max(ay, by, cy)) / 2
+    ax -= ox
+    ay -= oy
+    bx -= ox
+    by -= oy
+    cx -= ox
+    cy -= oy
+    d = (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by)) * 2
+    if d == 0:
+        return None
+    x = (
+        ox
+        + (
+            (ax * ax + ay * ay) * (by - cy)
+            + (bx * bx + by * by) * (cy - ay)
+            + (cx * cx + cy * cy) * (ay - by)
+        )
+        / d
+    )
+    y = (
+        oy
+        + (
+            (ax * ax + ay * ay) * (cx - bx)
+            + (bx * bx + by * by) * (ax - cx)
+            + (cx * cx + cy * cy) * (bx - ax)
+        )
+        / d
+    )
+    ra = math.hypot(x - p0[0], y - p0[1])
+    rb = math.hypot(x - p1[0], y - p1[1])
+    rc = math.hypot(x - p2[0], y - p2[1])
+    return (x, y, max(ra, rb, rc))
+
+def _is_in_circle(c, p):
+    return (
+        c is not None
+        and math.hypot(p[0] - c[0], p[1] - c[1]) <= c[2] * _MULTIPLICATIVE_EPSILON
+    )
+
+def _cross_product(x0, y0, x1, y1, x2, y2):
+    """
+    Returns twice the signed area of the
+    triangle defined by (x0, y0), (x1, y1), (x2, y2).
+    """
+    return (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0)
+
+def _make_diameter(p0, p1):
+    cx = (p0[0] + p1[0]) / 2
+    cy = (p0[1] + p1[1]) / 2
+    r0 = math.hypot(cx - p0[0], cy - p0[1])
+    r1 = math.hypot(cx - p1[0], cy - p1[1])
+    return (cx, cy, max(r0, r1))
+
+def _true_angle(a, b, c):
+    ba = a - b
+    bc = c - b
+
+    cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+    angle = np.arccos(cosine_angle)
+
+    # TODO: add arg to specify these values
+    if np.degrees(angle) <= 170:
+        return True
+    if np.degrees(angle) >= 190:
+        return True
+    return False
+
+
+def get_minimum_bounding_rectangle(building_nodes):
+    # Adapted and modified to work with gpd.GeoDataFrame input (Original algorithm:  https://stackoverflow.com/questions/13542855/algorithm-to-find-the-minimum-area-rectangle-for-given-points-in-order-to-comput answered by user JesseBuesking)
+    
+    from scipy.ndimage import rotate
+    pi2 = np.pi/2
+    
+    # Get convex hull coordinates
+    convex_hull_points = [np.array(i.coords) for i in building_nodes.convex_hull.exterior] 
+    
+    # Get vector between each point by subtraction
+    edges = [point[1:] - point[:-1] for point in convex_hull_points]
+    
+    # Compute angle between vectors
+    angles = [np.arctan2(edge[:, 1], edge[:, 0]) for edge in edges]
+    angles = [np.abs(np.mod(angle, pi2)) for angle in angles]
+    angles = [np.unique(angle) for angle in angles]
+    
+    mbr_list = []
+    
+    for angle, hull_coords in zip(angles, convex_hull_points):
+        rotations = np.vstack([
+                np.cos(angle),
+                np.cos(angle-pi2),
+                np.cos(angle+pi2),
+                np.cos(angle)]).T
+
+        rotations = rotations.reshape((-1, 2, 2))
         
-    return combined_with_height
+        # apply rotations to the hull
+        rot_points = np.dot(rotations, hull_coords.T)
+        
+        # find the bounding points
+        min_x = np.nanmin(rot_points[:, 0], axis=1)
+        max_x = np.nanmax(rot_points[:, 0], axis=1)
+        min_y = np.nanmin(rot_points[:, 1], axis=1)
+        max_y = np.nanmax(rot_points[:, 1], axis=1)
+        
+        # find the box with the best area
+        areas = (max_x - min_x) * (max_y - min_y)
+        best_idx = np.argmin(areas)
+        
+        # return the best box
+        x1 = max_x[best_idx]
+        x2 = min_x[best_idx]
+        y1 = max_y[best_idx]
+        y2 = min_y[best_idx]
+        r = rotations[best_idx]
+
+        rval = np.zeros((4, 2))
+        rval[0] = np.dot([x1, y2], r)
+        rval[1] = np.dot([x2, y2], r)
+        rval[2] = np.dot([x2, y1], r)
+        rval[3] = np.dot([x1, y1], r)
+        
+        mbr_list.append(Polygon(rval))
+        
+    return mbr_list
+
+def _dist(a, b):
+    return math.hypot(b[0] - a[0], b[1] - a[1])
+
+def _azimuth(point1, point2):
+    """Return the azimuth between 2 shapely points (interval 0 - 180)."""
+    angle = np.arctan2(point2[0] - point1[0], point2[1] - point1[1])
+    return np.degrees(angle) % 180
+
+def _make_linestring(centroid, angle, length):
+    x, y = centroid[0], centroid[1]
+    endy = y + length * math.sin(angle)
+    endx = x + length * math.cos(angle)
+    fromy = y - length * math.sin(angle)
+    fromx = x - length * math.cos(angle)
+
+    return LineString([(fromx,fromy),(x,y), (endx, endy)])
+
+def _angle(a, b, c):
+            ba = a - b
+            bc = c - b
+
+            cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+            angle = np.degrees(np.arccos(cosine_angle))
+
+            return angle
+
+def _calc(geom):
+    angles = []
+    points = list(geom.exterior.coords)  # get points of a shape
+    n_points = len(points)
+    if n_points < 3:
+        return np.nan
+    stop = n_points - 1
+    for i in range(
+        1, n_points
+    ):  # for every point, calculate angle and add 1 if True angle
+        a = np.asarray(points[i - 1])
+        b = np.asarray(points[i])
+        # in last case, needs to wrap around start to find finishing angle
+        c = np.asarray(points[i + 1]) if i != stop else np.asarray(points[1])
+        ang = _angle(a, b, c)
+        if ang <= 175 or ang >= 185:
+            angles.append(ang)
+        else:
+            continue
+    deviations = [abs(90 - i) for i in angles]
+    return np.mean(deviations)
