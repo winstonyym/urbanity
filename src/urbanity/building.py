@@ -821,13 +821,13 @@ def _angle(a, b, c):
     Returns:
         float: Angle between vectors.
     """    
-            ba = a - b
-            bc = c - b
+        ba = a - b
+        bc = c - b
 
-            cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
-            angle = np.degrees(np.arccos(cosine_angle))
+        cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+        angle = np.degrees(np.arccos(cosine_angle))
 
-            return angle
+        return angle
 
 def _calc(geom):
     """Helper function to calculate the angle of deviation between points.
