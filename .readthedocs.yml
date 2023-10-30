@@ -4,8 +4,12 @@ version: 2
 # Image to use
 build:
   os: ubuntu-22.04
-  image: testing
+  tools:
+    python: "3.9"
 
+sphinx:
+  configuration: docs/conf.py
+  
 # Configuration
 python:
   version: 3.9
