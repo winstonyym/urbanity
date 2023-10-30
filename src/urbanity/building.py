@@ -116,7 +116,7 @@ def assign_numerical_id_suffix(gdf, prefix):
 
     Args:
         gdf (gpd.GeoDataFrame): A geopandas GeoDataFrame with duplicate column id due to conversion between MultiPolygon to Polygons.
-        prefix (str): Specifies whether the GeoDataFrame assigned corresponds to Overture (overture_) or OSM (osm_) building footprints. 
+        prefix (str): Specifies whether the GeoDataFrame assigned corresponds to Overture (overture) or OSM (osm) building footprints. 
 
     Returns:
         gpd.GeoDataFrame: Returns a modified GeoDataFrame with unique building footprint ids.
