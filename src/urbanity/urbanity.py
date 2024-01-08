@@ -2359,7 +2359,8 @@ class Map(ipyleaflet.Map):
             # Project and buffer original polygon to examine nodes outside boundary
             try:
                 original_bbox = self.polygon_bounds.geometry[0]
-                buffered_tp = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+                buffered_tp = self.polygon_bounds.copy()
+                buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
                 buffered_bbox = buffered_tp.geometry.values[0]
             # catch when it hasn't even been defined 
             except (AttributeError, NameError):
@@ -2803,7 +2804,8 @@ class Map(ipyleaflet.Map):
 
         # Associate each plot with respective tile_id and create mapping dictionary
         original_bbox = self.polygon_bounds.geometry[0]
-        buffered_tp = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+        buffered_tp = self.polygon_bounds.copy()
+        buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
 
         tile_gdf = get_tile_geometry(buffered_tp)
         tile_gdf = tile_gdf.set_crs(self.polygon_bounds.crs)

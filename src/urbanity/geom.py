@@ -2,6 +2,7 @@
 from shapely.ops import split
 from functools import partial
 from shapely.geometry import Point, Polygon, LineString, MultiPolygon
+from shapely.prepared import prep
 import networkx as nx
 import geopandas as gpd
 import pandas as pd
@@ -481,6 +482,33 @@ def fill_and_expand(gdf):
     gdf2 = gdf2.explode(index_parts=True)
     
     return gdf2
+
+def get_tile_geometry_delta(gdf, delta=4):
+    """Utility function to get tile geometries for area of interest by fixed distance.
+
+    Args:
+        gdf (gpd.GeoDataFrame): A geopandas dataframe object.
+
+    Returns:
+        gpd.GeoDataFrame: A geopandas dataframe object consisting of tile polygons.
+    """  
+    def grid_bounds(gdf, delta):
+        minx, miny, maxx, maxy = gdf.geometry.bounds.iloc[0].values
+        nx = int((maxx - minx)/delta)
+        ny = int((maxy - miny)/delta)
+        gx, gy = np.linspace(minx,maxx,nx), np.linspace(miny,maxy,ny)
+        grid = []
+        for i in range(len(gx)-1):
+            for j in range(len(gy)-1):
+                poly_ij = Polygon([[gx[i],gy[j]],[gx[i],gy[j+1]],[gx[i+1],gy[j+1]],[gx[i+1],gy[j]]])
+                grid.append( poly_ij )
+        return grid
+    
+    prepared_geom = prep(gdf.geometry.values[0])
+    grid = list(filter(prepared_geom.intersects, grid_bounds(gdf, delta)))
+    intersecting_tiles = gpd.GeoDataFrame(data={'TILEID':range(len(grid))}, crs = 'epsg:4326', geometry = grid)
+    return intersecting_tiles
+
 
 def get_tile_geometry(gdf):
     """Utility function to get tile geometries for area of interest.

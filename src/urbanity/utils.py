@@ -3,6 +3,7 @@ import os
 import json
 import pkg_resources
 import geopandas as gpd
+from shapely.geometry import LineString
 from urbanity.geom import project_gdf
 import numpy as np
 from IPython.display import display

@@ -13,6 +13,63 @@ import numpy as np
 import geopandas as gpd
 from urbanity.geom import fill_and_expand, project_gdf, buffer_polygon
 
+def get_osm_buildings(location = '', fp = '', boundary=None):
+    """Wrapper around pyrosm API to retrieve OpenStreetMap building footprints from Geofabrik. Optionally accepts a GeoDataFrame as bounding spatial extent.
+
+    Args:
+        location (str): Specfic country or city name to obtain OpenStreetMap data.
+        boundary (gpd.GeoDataFrame, optional): A GeoDataFrame corresponding to bounding spatial extent. Defaults to None.
+
+    Returns:
+        gpd.GeoDataFrame: A geopandas GeoDataFrame containing OSM building footprints for specified spatial extent.
+    """    
+    if os.path.exists('./data'):
+        pass
+    else:
+        os.makedirs('./data')
+
+    if fp == '' and location != '':
+        fp = get_data(location, directory = './data')
+        osm = pyrosm.OSM(fp, bounding_box=boundary.geometry.values[0])
+
+    elif fp == '' and location == '':
+        raise ValueError("Please specify a valid city or country name.")
+    else:
+        buffered_boundary = buffer_polygon(boundary)
+        osm = pyrosm.OSM(fp, bounding_box=buffered_boundary.geometry.values[0])
+
+    osm_buildings = osm.get_buildings()
+
+    
+    return osm_buildings
+
+def remove_overlapping_polygons(building):
+    """Function to remove instances of buildings that overlap with one another. In cases of overlap, the biggest polygon is retained.
+
+    Args:
+        building (gpd.GeoDataFrame): A geopandas dataframe consisting of original building footprints.
+
+    Returns:
+        gpd.GeoDataFrame: Modified geopandas dataframe with each building footprint isolated from one another.
+    """    
+    # Intersect polygon with itself
+    build_intersect = building.overlay(building)
+    
+    # Find ids which have more than one intersection with nearby polygons 
+    duplicate_ids = build_intersect['bid_1'].value_counts().index[(build_intersect['bid_1'].value_counts().values > 1)]
+    
+    # For duplicate ids, remove them from the original polygon, and only keep the biggest one
+    for bid in duplicate_ids:
+        
+        bids_to_remove = list(build_intersect[build_intersect['bid_1']==bid]['bid_2'])
+        max_area = build_intersect[build_intersect['bid_1']==bid]['bid_area_2'].max()
+        biggest_bid = build_intersect[(build_intersect['bid_area_2'] == max_area) & (build_intersect['bid_1']==bid)]['bid_2'].values[0]
+        bids_to_remove.remove(biggest_bid)
+        building = building[~building['bid'].isin(bids_to_remove)]
+    
+    building = building.reset_index(drop=True) 
+    return building
+
 def building_knn_nearest(gdf, knn=3):
     """Helper function to generate nearest neighbours and distance for buildings.
 
@@ -187,7 +244,7 @@ def compute_shape_index(building_nodes, element = 'building'):
     Returns:
         gpd.GeoDataFrame: Modified geopandas GeoDataFrame with column for footprint shape index attribute added. 
     """  
-    building_nodes[f'{element}_shape_idx'] = np.sqrt((building_nodes[f'{element}_area']/math.pi))/(0.5 * building_nodes[f'{element}_orientation'])
+    building_nodes[f'{element}_shape_idx'] = np.sqrt((building_nodes[f'{element}_area']/math.pi))/(0.5 * building_nodes[f'{element}_longest_axis_length'])
 
     return building_nodes
 
