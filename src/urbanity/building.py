@@ -43,6 +43,19 @@ def get_osm_buildings(location = '', fp = '', boundary=None):
     
     return osm_buildings
 
+def get_overture_buildings(building_data):
+    """Temporary loader to directly load Overture building footprints.
+
+    Args:
+        building_data (str): Path to building footprint data.
+
+    Returns:
+        gpd.GeoDataFrame: A geopandas GeoDataFrame containing OSM building footprints for specified spatial extent.
+    """    
+
+    return gpd.read_parquet(building_data)
+
+
 def remove_overlapping_polygons(building):
     """Function to remove instances of buildings that overlap with one another. In cases of overlap, the biggest polygon is retained.
 
@@ -128,8 +141,8 @@ def compute_knn_aggregate(building_nodes, attr_cols):
     
     return building_nodes
 
-def preprocess_osm_building_geometry(osm_buildings, minimum_area=30):
-    """Experimental function. Helper function to preprocess OSM building footprint data. The function first converts all geometry time to Polygons, 
+def preprocess_osm_building_geometry(buildings, minimum_area=30, prefix='osm'):
+    """Experimental function. Helper function to preprocess OSM or Overture building footprint data. The function first converts all geometry time to Polygons, 
     checks the validity of each Polygon object, applies local projection, and removes buildings with area less than a specified minimum area.
 
     Args:
@@ -141,7 +154,7 @@ def preprocess_osm_building_geometry(osm_buildings, minimum_area=30):
     """    
 
     # Remove linestrings, explode multipolygons, and remove invalid polygons
-    building_polygons = fill_and_expand(osm_buildings)
+    building_polygons = fill_and_expand(buildings)
     building_polygons = building_polygons[building_polygons.geometry.is_valid]
     
     # Get total number of buildings
@@ -149,16 +162,16 @@ def preprocess_osm_building_geometry(osm_buildings, minimum_area=30):
     # print(f'Total number of buildings in osm-building-dataset is: {total_buildings}.')
     
     # Add prefix to all columns to facilitate spatial overlay operations (no duplicate key)
-    building_polygons.columns = ['osm_'+i if i!='geometry' else i for i in building_polygons.columns]
+    building_polygons.columns = [f'{prefix}_'+i if i!='geometry' else i for i in building_polygons.columns]
     
     # Locally project building polygons
     building_proj = project_gdf(building_polygons)
     
     # Compute building footprint area
-    building_proj['osm_original_area'] = building_proj.geometry.area
+    building_proj[f'{prefix}_'+'original_area'] = building_proj.geometry.area
     
     # Filter out buildings with footprint area less than 30 sqm
-    building_geom_gdf = building_proj[building_proj['osm_original_area'] >= minimum_area]
+    building_geom_gdf = building_proj[building_proj[f'{prefix}_'+'original_area'] >= minimum_area]
     # print(f'Removed {total_buildings - len(building_geom_gdf)} buildings with area less than {minimum_area} sqm.')
     # print(f'Resulting number of buildings in osm-building-dataset is: {len(building_geom_gdf)}.')
     
@@ -167,7 +180,9 @@ def preprocess_osm_building_geometry(osm_buildings, minimum_area=30):
     
     return building_geom_gdf
 
-def assign_numerical_id_suffix(gdf, prefix):
+
+
+def assign_numerical_id_suffix(gdf, prefix='osm'):
     """Experimental function. Helper function to assign unique building ids to building footprints. Items with duplicate ids are assigned suffixes corresponding to their count "_(count)". 
     For example, if two building polygons have the id: 12093210, the first will be renamed to 12093210_1 and second to 12093210_2.
 
@@ -179,8 +194,12 @@ def assign_numerical_id_suffix(gdf, prefix):
         gpd.GeoDataFrame: Returns a modified GeoDataFrame with unique building footprint ids.
     """    
     modified_gdf = gdf.copy()
-    modified_gdf[f'{prefix}_id'] = modified_gdf[f'{prefix}_id'].astype(str)
-    
+
+    if prefix == 'osm':
+        modified_gdf[f'{prefix}_id'] = modified_gdf[f'{prefix}_id'].astype(str)
+    elif prefix == 'overture':
+        modified_gdf[f'{prefix}_id'] = modified_gdf[f'{prefix}_id'].astype(str)
+
     original_ids = list(modified_gdf[f'{prefix}_id'].value_counts().index[modified_gdf[f'{prefix}_id'].value_counts() > 1])
     
     for target in original_ids:

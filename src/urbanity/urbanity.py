@@ -20,7 +20,11 @@ import pkg_resources
 from webbrowser import get
 
 # import module functions and classes
-from .utils import get_country_centroids, finetune_poi, get_available_precomputed_network_data, most_frequent
+from .utils import get_country_centroids, finetune_poi, get_available_precomputed_network_data, most_frequent, get_plot_to_plot_edges, \
+                    get_building_to_street_edges, get_edge_nodes, get_building_to_building_edges, get_intersection_to_street_edges, \
+                    get_buildings_in_plot_edges, get_edges_along_plot, add_super_node, remove_non_numeric_columns_objects, standardise_and_scale, \
+                    fill_na_in_objects, one_hot_encode_categorical, save_to_h5 
+
 from .geom import *
 from .building import *
 from .population import get_population_data, get_tiled_population_data, raster2gdf
@@ -57,6 +61,7 @@ class Map(ipyleaflet.Map):
         self.population = []
         self.svi = None
         self.pois = None
+        self.urban_plots = None
 
         if os.path.isdir('./data'):
             self.directory = "./data"
@@ -171,6 +176,10 @@ class Map(ipyleaflet.Map):
             # GeoJSON string file
             gdf = gpd.read_file(filepath)
         
+        # Check for and drop timestamp column
+        timestamp_columns = gdf.select_dtypes(include=['datetime64', 'timedelta64']).columns
+        gdf = gdf.drop(columns=timestamp_columns)
+
         # Assign polygon boundary attribute to polygon object
         self.polygon_bounds = gdf
 
@@ -179,6 +188,7 @@ class Map(ipyleaflet.Map):
                    style=polygon_style['style'],
                    hover_style=polygon_style['hover_style'],
                    name = layer_name)
+        
         self.add_layer(geo_data)
         
     def remove_polygon_boundary(self) -> None:
@@ -547,16 +557,23 @@ class Map(ipyleaflet.Map):
             
             if graph_attr:
                 # Add Node Density
+               
                 res_intersection = proj_nodes.overlay(nodes_buffer, how='intersection')
+                
                 res_intersection['num_nodes'] = 1
                 # Use intersection_id_2 because of node-node_buffer intersection
+                
                 nodes["intersection_num_nodes"] = res_intersection.groupby(['intersection_id_2'])['num_nodes'].sum().values
                 
                 # Add Street Length
                 res_intersection = proj_edges.overlay(nodes_buffer, how='intersection')
+
                 res_intersection['street_len'] = res_intersection.geometry.length
+     
                 nodes["intersection_total_street_length"] = res_intersection.groupby(['intersection_id'])['street_len'].sum().values
+
                 nodes["intersection_total_street_length"] = nodes["intersection_total_street_length"].round(3)
+
 
                 # Add Degree Centrality, Clustering (Weighted and Unweighted)
                 nodes = merge_nx_property(nodes, G_buff_trunc_loop.out_degree, 'intersection_degree')
@@ -2160,7 +2177,7 @@ class Map(ipyleaflet.Map):
         return_neighbours: str = 'knn',
         knn: list = [3, 5, 8, 10],
         knn_threshold: int = 100,
-        distance_threshold: list = [100, 200, 500],
+        distance_threshold: list = [100, 200, 300],
         building_data: str = 'osm') -> gpd.GeoDataFrame:
         """Generate a building network nodes with preprocessed attribute information. For each building, neighbourhood is computed based on either K-nearest neighbour or distance threshold. Neighbourhood information is provided as an attribute 
         that consists of the list of neighbours according to building index. 
@@ -2842,3 +2859,430 @@ class Map(ipyleaflet.Map):
 
         return urban_plots
     
+    def get_urban_graph(
+            self, 
+            network_filepath: str, 
+            svi_filepath: str,
+            building_filepath: str,
+            poi_filepath: str, 
+            bandwidth: int = 100,
+            minimum_area: int = 30,
+            knn: list = [3],
+            knn_threshold: int = 100,
+            return_neighbours: str = 'distance',
+            distance_threshold: list = [100],
+            network_type: str = 'driving',
+            add_self_as_super_node: bool = False,
+            save_as_h5: bool = False,
+            h5_filepath: str = ''
+            ) -> [gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Function to generate heterogeneous urban graph. Returns node types as individual geodataframes: 1) urban plots; 2) buildings; 3) streets; 4) intersections.
+        Bandwidth (m) can be specified to buffer network, obtaining neighbouring nodes within buffered area of network.
+
+        Args:
+            network_filepath (str): Specify path to osm.pbf file.
+            svi_filepath (str): Specify path to street view imagery file.
+            building_filepath (str): Specify path to overture building footprint file.
+            poi_filepath (str): Specify path to overture poi file.
+            bandwidth (int): Distance to extract information beyond network. Defaults to 100.
+            minimum_area (int): Specifies minimum plot area to filter small urban plots (e.g. small polygons formed by road intersection).
+            knn (list): Specifies the number of neighbours for each building to form building to building edges.
+            knn_threshold (int): Specifies the distance (metres) for a building to be considered a neighbour. To simplify computation, distance is measured between building to building centroid.
+            return_neighbours (str): Choose whether to use knn option or distance (knn threshold) to define building neighbours. 
+            distance_threshold (list): Specifies the set of buffer distances to search for building neighbours.
+            network_type (str): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
+            add_self_as_super_node (bool): If True, inserts spatial boundary (as specified in Map object `polygon_bounds` property) as a super node that is connected to other polygon elements (e.g. usually urban plot). Useful for tasks that involve prediction of attributes corresponding to spatial boundary. 
+            save_as_h5 (bool): If True, applies standard numerical preprocessing which includes scaling numerical columns and one-hot encoding categorical columns. Saves output as binarized h5py format to optimize space.
+            h5_filepath (str): Specifies location to save h5py graph object. 
+        Returns:
+            gpd.GeoDataFrame: A geopandas GeoDataFrame of map boundary as super node that is connected to each plot within it.
+            gpd.GeoDataFrame: A geopandas GeoDataFrame of urban plots (polygons) and contextual spatial features that are located within each plot.
+            gpd.GeoDataFrame: A geopandas GeoDataFrame of building footprints (polygons) and morphological features of each building.
+            gpd.GeoDataFrame: A geopandas GeoDataFrame of street segments (linestrings) and street view indices.
+            gpd.GeoDataFrame: A geopandas GeoDataFrame of street intersections (points) with metric adn topological node properties.
+            np.ndarray: Plot to plot adjacency matrix (P X 2) where P refers to the number of links between each plot. A link is established if plots are adjacent to each other.
+            np.ndarray: Plot to building adjacency matrix (P_b X 2) where P_b refers to the number of links between buildings and urban plots. A link is established if a building is within a plot.
+            np.ndarray: Plot to street adjacency matrix (P_s X 2) where P_s refers to the number of links between streets and urban plots. A link is established if a street forms the edge of a plot.
+            np.ndarray: Building to building adjacency matrix (B X 2) where B refers to the number of links between buildings. A link can be established in two different ways: 1) distance threshold between building centroids or 2) k-nearest neighbours.
+            np.ndarray: Building to street adjacency matrix (B_s X 2) where B_s refers to the number of links between buildings and streets. A link is established between each building and its nearest adjacent street. 
+            np.ndarray: Street to intersection adjacency matrix (S_i X 2) where S_i refers to the number of links between streets and intersections. A link is established if one end of a street segment is connected to an intersection. 
+        """ 
+        
+        # If precomputed available, use precomputed
+        start = time.time()
+
+        if self.network:
+            print('Network data found, skipping re-computation')
+            G_buff_trunc_loop, nodes, edges = self.network[0], self.network[1], self.network[2]
+        
+        else:
+            # Project and buffer original polygon to examine nodes outside boundary
+            try:
+                original_bbox = self.polygon_bounds.geometry[0]
+                buffered_tp = self.polygon_bounds.copy()
+                buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+                buffered_bbox = buffered_tp.geometry.values[0]
+            # catch when it hasn't even been defined 
+            except (AttributeError, NameError):
+                raise Exception('Please delimit a bounding box.')
+
+            # Obtain nodes and edges within buffered polygon
+            osm = pyrosm.OSM(network_filepath, bounding_box=buffered_bbox)
+            
+            nodes, edges = osm.get_network(network_type=network_type, nodes=True)
+
+            # Build networkx graph for pre-processing
+            G_buff = osm.to_graph(nodes, edges, graph_type="networkx", force_bidirectional=True, retain_all=True)
+            
+            # Add great circle length to network edges
+            G_buff = add_edge_lengths(G_buff)
+
+            # Simplify graph by removing nodes between endpoints and joining linestrings
+            G_buff_simple = simplify_graph(G_buff)
+
+            # Identify nodes inside and outside (buffered polygon) of original polygon
+            gs_nodes = graph_to_gdf(G_buff_simple, nodes=True)[["geometry"]]
+            to_keep = gs_nodes.within(original_bbox)
+            to_keep = gs_nodes[to_keep]
+            nodes_outside = gs_nodes[~gs_nodes.index.isin(to_keep.index)]
+            set_outside = nodes_outside.index
+
+            # Truncate network by edge if all neighbours fall outside original polygon
+            nodes_to_remove = set()
+            for node in set_outside:
+                neighbors = set(G_buff_simple.successors(node)) | set(G_buff_simple.predecessors(node))
+                if neighbors.issubset(nodes_outside):
+                    nodes_to_remove.add(node)
+            
+            G_buff_trunc = G_buff_simple.copy()
+            initial = G_buff_trunc.number_of_nodes()
+            G_buff_trunc.remove_nodes_from(nodes_to_remove)
+
+            # Remove unconnected subgraphs
+            max_wcc = max(nx.weakly_connected_components(G_buff_trunc), key=len)
+            G_buff_trunc = nx.subgraph(G_buff_trunc, max_wcc)
+
+            # Remove self loops
+            G_buff_trunc_loop = G_buff_trunc.copy()
+            G_buff_trunc_loop.remove_edges_from(nx.selfloop_edges(G_buff_trunc_loop))
+
+            nodes, edges = graph_to_gdf(G_buff_trunc_loop, nodes=True, edges=True)
+
+            # Fill NA and drop incomplete columns
+            nodes = nodes.fillna('')
+            edges = edges.fillna('')
+            nodes = nodes.drop(columns=['osmid','tags','timestamp','version','changeset']).reset_index()
+            edges = edges.reset_index()[['u','v','length','geometry']]
+
+            # Assign unique IDs
+            nodes['intersection_id'] = nodes.index
+            nodes = nodes[['intersection_id','osmid', 'x', 'y', 'geometry']]
+            
+            edges['edge_id'] = edges.index
+            edges = edges[['edge_id', 'u', 'v', 'length','geometry']]
+
+            self.network.append(G_buff_trunc_loop)
+            self.network.append(nodes)
+            self.network.append(edges)
+
+            # Add network attributes
+            proj_nodes = project_gdf(nodes)
+            proj_edges = project_gdf(edges)
+
+            # Buffer around nodes
+            nodes_buffer = proj_nodes.copy()
+            nodes_buffer['geometry'] = nodes_buffer.geometry.buffer(bandwidth)
+                
+            res_intersection = proj_nodes.overlay(nodes_buffer, how='intersection')
+            res_intersection['num_nodes'] = 1
+            # Use intersection_id_2 because of node-node_buffer intersection
+            nodes["intersection_num_nodes"] = res_intersection.groupby(['intersection_id_2'])['num_nodes'].sum().values
+            
+            # Add Street Length
+            res_intersection = proj_edges.overlay(nodes_buffer, how='intersection')
+            res_intersection['street_len'] = res_intersection.geometry.length
+            nodes["intersection_total_street_length"] = res_intersection.groupby(['intersection_id'])['street_len'].sum().values
+            nodes["intersection_total_street_length"] = nodes["intersection_total_street_length"].round(3)
+
+            # Add Degree Centrality, Clustering (Weighted and Unweighted)
+            nodes = merge_nx_property(nodes, G_buff_trunc_loop.out_degree, 'intersection_degree')
+            nodes = merge_nx_attr(G_buff_trunc_loop, nodes, nx.clustering, 'intersection_clustering')
+            nodes = merge_nx_attr(G_buff_trunc_loop, nodes, nx.clustering, 'inter_section_weighted_clustering', weight='length')
+
+            #  Add Centrality Measures
+            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.Closeness, 'Closeness Centrality', False, False)
+            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.Betweenness, 'Betweenness Centrality', True)
+            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.EigenvectorCentrality, 'Eigenvector Centrality')
+            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.KatzCentrality, 'Katz Centrality')
+            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.PageRank, 'PageRank', 0.85, 1e-8, networkit.centrality.SinkHandling.NoSinkHandling, True)
+
+            print(f'Network constructed. Time taken: {round(time.time() - start)}.')
+
+            # Add SVI to edges
+            svi_data = gpd.read_parquet(svi_filepath)
+
+            # Generate edge uids
+            svi_data['uv'] = svi_data['u']+svi_data['v']
+            edges['uv'] = edges['u'] + edges['v']
+
+            # Proportion
+            count_cols = [col for col in svi_data.columns if 'counts' in col]
+            score_cols = [col for col in svi_data.columns if 'score' in col]
+
+            pixel_cols = [col for col in svi_data.columns if 'pixels' in col]
+            svi_data[pixel_cols] = svi_data[pixel_cols].div(svi_data['Total'], axis=0)
+
+            # Groupby edge
+            aggr_svi_score = svi_data.groupby(['uv'])[score_cols].aggregate('mean')
+            aggr_svi_pixels = svi_data.groupby(['uv'])[pixel_cols].aggregate('mean')
+            aggr_svi_count = svi_data.groupby(['uv'])[count_cols].aggregate('mean')
+
+            # Join pixel mean to network edges
+            edges = edges.merge(aggr_svi_score, on='uv', how='left')
+            edges[score_cols] = edges[score_cols].fillna(edges[score_cols].mean())
+
+            # Join pixel mean to network edges
+            edges = edges.merge(aggr_svi_pixels, on='uv', how='left')
+            edges[pixel_cols] = edges[pixel_cols].fillna(edges[pixel_cols].mean())
+
+            # Join count mean to network edges
+            edges = edges.merge(aggr_svi_count, on='uv', how='left')
+            edges[count_cols] = edges[count_cols].fillna(edges[count_cols].mean())
+
+            # Add SVI counts
+            edge_svi_count_series = svi_data['uv'].value_counts()
+            edge_svi_count_series.name = 'Number_of_SVI'
+            edges = edges.merge(edge_svi_count_series, on='uv', how='left')
+            edges['Number_of_SVI'] = edges['Number_of_SVI'].replace(np.nan, 0)
+
+
+            print(f'SVI attributes computed. Time taken: {round(time.time() - start)}.')
+            
+            self.svi = svi_data
+
+            
+        # Compute and add building attributes.
+        if self.buildings is not None: 
+            print('Building data found, skipping re-computation.')
+            building_polygon = self.buildings
+
+        else:
+            buildings = get_overture_buildings(building_filepath)
+
+            # Process geometry and attributes for Overture buildings; locally projects
+            buildings = preprocess_osm_building_geometry(buildings, minimum_area=30, prefix='overture')
+        
+            # Obtain unique ids for buildings
+            buildings = assign_numerical_id_suffix(buildings, prefix='overture')
+            buildings = buildings.reset_index(drop=True)
+
+            buildings['bid'] = buildings.index
+            buildings['bid_area'] = buildings.geometry.area
+            buildings['bid_perimeter'] = buildings.geometry.length
+            building_centroids = buildings.geometry.centroid
+            buildings = buildings[['bid', 'bid_area', 'bid_perimeter', 'geometry']]
+
+            # Compute building attributes
+            buildings = compute_circularcompactness(buildings, element='bid')
+            buildings = compute_convexity(buildings, element='bid')
+            buildings = compute_corners(buildings, element='bid')
+            buildings = compute_elongation(buildings, element='bid')
+            buildings = compute_orientation(buildings, element='bid')
+            # building_polygon = compute_shared_wall_ratio(building_polygon, element='bid')
+            buildings = compute_longest_axis_length(buildings, element='bid')
+            buildings = compute_equivalent_rectangular_index(buildings, element='bid')
+            buildings = compute_fractaldim(buildings, element='bid')
+            buildings = compute_rectangularity(buildings, element='bid')
+            buildings = compute_square_compactness(buildings, element='bid')
+            buildings = compute_shape_index(buildings, element='bid')
+            buildings = compute_squareness(buildings, element='bid')
+            buildings = compute_complexity(buildings, element='bid')
+
+            attr_cols = ['bid_area', 'bid_perimeter', 'bid_circ_compact', 'bid_convexity',
+            'bid_corners', 'bid_elongation', 'bid_orientation', 'bid_longest_axis_length',
+            'bid_eri', 'bid_fractaldim', 'bid_rectangularity', 'bid_squareness',
+            'bid_square_compactness', 'bid_shape_idx', 'bid_complexity']
+
+            if return_neighbours == 'knn':
+
+                def filter_threshold(nn, dist):
+                    return {k:v for k,v in zip(nn, dist) if v <= knn_threshold}
+                
+                # Compute attributes
+                for i in knn:
+                    buildings = building_knn_nearest(buildings, knn=i)
+                    buildings[f'{i}-nn-threshold'] = buildings.apply(lambda row: filter_threshold(row[f'{i}-nn-idx'], row[f'{i}-dist']), axis=1)
+
+                buildings = compute_knn_aggregate(buildings, attr_cols)
+                adj_column = f'{knn[0]}_knn_idx'
+
+            elif return_neighbours == 'distance':
+                def remove_self(neighbours, bid):
+                    neighbours.remove(bid)
+                    return neighbours
+                
+                for i in distance_threshold:
+                    buffer_gdf = gpd.GeoDataFrame(data={'buffer_id':buildings.index}, crs=buildings.crs, geometry = building_centroids)
+                    buffer_gdf['geometry'] = buffer_gdf.geometry.buffer(i)
+
+                    # Spatial intersection of building
+                    res_intersection = buildings.overlay(buffer_gdf, how='intersection')
+                    buildings[f'{i}_dist_idx'] = res_intersection.groupby(['buffer_id'])['bid'].agg(list)
+                    buildings[f'{i}_dist_idx'] = buildings.apply(lambda row: remove_self(row[f'{i}_dist_idx'], row['bid']), axis=1)
+
+                    for attr in attr_cols:
+                        mean_series = res_intersection.groupby(['buffer_id'])[attr].mean()
+                        std_series = res_intersection.groupby(['buffer_id'])[attr].std()
+                        df = pd.DataFrame({f'{i}m_{attr}_mean':mean_series.values, f'{i}m_{attr}_stdev':std_series.values})
+                        buildings = gpd.GeoDataFrame(pd.concat([buildings,df],axis=1))
+                
+                adj_column = f'{distance_threshold[0]}_dist_idx'
+
+            buildings = buildings.to_crs('EPSG:4326')
+            # Set computed building data as map attribute
+            self.buildings = buildings
+
+            print(f'Buildings constructed. Time taken: {round(time.time() - start)}.')
+
+        if self.urban_plots is not None:
+            print('Urban plots data found, skipping re-computation.')
+            urban_plots = self.urban_plots
+
+        else:
+            # Obtain urban plots
+            original_bbox = self.polygon_bounds.geometry[0]
+            buffered_tp = self.polygon_bounds.copy()
+            buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+            proj_boundary = project_gdf(buffered_tp)
+
+            # Create expanded buffer (buffer bandwidth)
+            proj_boundary_expanded = proj_boundary.copy()
+            proj_boundary_expanded['geometry'] = proj_boundary.buffer(10)
+
+            # Get inner and out edges
+            outside_edges_proj = proj_edges.overlay(proj_boundary_expanded, how='difference')
+            inside_edges_proj = proj_edges[~proj_edges['edge_id'].isin(list(outside_edges_proj['edge_id']))]
+
+            # Group linestring with edge_ids
+            linestrings_with_attributes = [(linestring, edge_id) for linestring, edge_id in zip(inside_edges_proj.geometry, inside_edges_proj['edge_id'])]
+
+            # Polygonize linestrings
+            merged_linestrings = unary_union(pd.concat([inside_edges_proj.geometry, proj_boundary.boundary.geometry]))
+            polygons = list(polygonize(merged_linestrings))
+
+            # Create urban plots
+            urban_plots = gpd.GeoDataFrame(data={'plot_id': range(len(polygons))}, crs=proj_edges.crs, geometry = polygons)
+
+            # Associate urban plots with edge ids
+            polygon_features = []
+
+            for i, polygon in enumerate(polygons):
+                attributes = []
+                
+                for line, attr in linestrings_with_attributes:
+                    if polygon.covers(line):
+                        attributes.append(attr)
+                
+                polygon_features.append(attributes)
+
+            # Create geodataframe associating each polygon with their own edge ids, filter by minimum size
+            urban_plots['edge_ids'] = polygon_features
+            urban_plots['plot_area'] = urban_plots.geometry.area
+            urban_plots['plot_perimeter'] = urban_plots.geometry.length
+            urban_plots = urban_plots[urban_plots['plot_area'] > minimum_area]
+            urban_plots = urban_plots.loc[urban_plots.geometry.is_valid]
+            urban_plots = urban_plots.reset_index(drop=True)
+            urban_plots['plot_id'] = urban_plots.index
+
+            urban_plots = urban_plots.to_crs('EPSG:4326')
+
+            # Add building id to plot
+            building_urban_plots_intersection = buildings.overlay(urban_plots)
+            urban_plots['bid'] = building_urban_plots_intersection.groupby('plot_id')[['bid']].aggregate(lambda x: list(x))
+            urban_plots['bid'] = urban_plots['bid'].fillna(0)
+            urban_plots['plot_building_count'] = urban_plots['bid'].apply(lambda x: len(x) if x !=0 else 0)
+            
+            attr_cols = ['bid_area', 'bid_perimeter', 'bid_circ_compact', 'bid_convexity', 'bid_corners', 'bid_elongation',
+                         'bid_orientation', 'bid_longest_axis_length', 'bid_eri', 'bid_fractaldim', 
+                         'bid_rectangularity', 'bid_squareness', 'bid_square_compactness', 'bid_shape_idx', 'bid_complexity']
+            
+            for attr in attr_cols:
+                urban_plots[f'plot_{attr}_mean'] = building_urban_plots_intersection.groupby('plot_id')[attr].mean()
+                urban_plots[f'plot_{attr}_std'] = building_urban_plots_intersection.groupby('plot_id')[attr].std()
+                urban_plots[f'plot_{attr}_std'] = urban_plots[f'plot_{attr}_std'].replace(np.nan, 0).astype(float)
+
+            # Compute plot level statistics
+            urban_plots['plot_bid_total_area'] = building_urban_plots_intersection.groupby('plot_id')['bid_area'].sum()
+            urban_plots['plot_bid_built_coverage'] = urban_plots['plot_bid_total_area'] / urban_plots['plot_area'] 
+            
+            # Compute building attributes
+            urban_plots = compute_circularcompactness(urban_plots, element='plot')
+            urban_plots = compute_convexity(urban_plots, element='plot')
+            urban_plots = compute_corners(urban_plots, element='plot')
+            urban_plots = compute_elongation(urban_plots, element='plot')
+            urban_plots = compute_orientation(urban_plots, element='plot')
+            urban_plots = compute_longest_axis_length(urban_plots, element='plot')
+            urban_plots = compute_equivalent_rectangular_index(urban_plots, element='plot')
+            urban_plots = compute_fractaldim(urban_plots, element='plot')
+            urban_plots = compute_rectangularity(urban_plots, element='plot')
+            urban_plots = compute_square_compactness(urban_plots, element='plot')
+            urban_plots = compute_shape_index(urban_plots, element='plot')
+            urban_plots = compute_squareness(urban_plots, element='plot')
+            urban_plots = compute_complexity(urban_plots, element = 'plot')
+            urban_plots = urban_plots.fillna(0)
+
+            # Add pois to urban plot
+            poi_columns = ['Cultural Institutions', 'Groceries', 'Parks', 'Religious Organizations', 'Restaurants', 'Schools', 'Services', 'Drugstores', 'Healthcare']
+
+            pois = gpd.read_parquet(poi_filepath)
+
+            poi_intersection = pois.overlay(urban_plots)
+            poi_series = poi_intersection.groupby(['plot_id'])['Category'].value_counts()
+            pois_df = pd.DataFrame(index = poi_series.index, data = poi_series.values).reset_index()
+            pois_df = pd.pivot(pois_df, index='plot_id', columns='Category', values=0).fillna(0)
+
+            urban_plots = urban_plots.merge(pois_df, on='plot_id', how='left')
+
+            for i in poi_columns:
+                if i not in set(pois.columns):
+                    pois[i] = 0
+                elif i in set(pois.columns):
+                    pois[i] = pois[i].replace(np.nan, 0)
+
+            self.urban_plots = urban_plots
+            print(f'Urban plots constructed. Time taken: {round(time.time() - start)}.')
+
+        # Get edge connections
+        objects = {}        
+        connections = {}
+
+        objects['plot'] = urban_plots
+        objects['building'] = buildings
+        objects['intersection'] = nodes
+        objects['street'] = edges
+
+        if add_self_as_super_node:
+            objects, connections = add_super_node(objects, connections, self.polygon_bounds, target='plot', name='boundary')
+
+        connections['plot_to_plot'], connections['plot_rev_plot']= get_plot_to_plot_edges(urban_plots)
+        connections['building_to_street'], connections['street_to_building']  = get_building_to_street_edges(edges, buildings)
+        connections['building_to_building'], connections['building_rev_building'] = get_building_to_building_edges(buildings, adj_column=adj_column)
+        connections['intersection_to_street'], connections['street_to_intersection'] = get_intersection_to_street_edges(nodes, edges)
+        connections['building_to_plot'], connections['plot_to_building'] = get_buildings_in_plot_edges(urban_plots, adj_column='bid')
+        connections['street_to_plot'], connections['plot_to_street'] = get_edges_along_plot(urban_plots, adj_column='edge_ids')
+
+        print("Total elapsed time --- %s seconds ---" % round(time.time() - start))
+
+        if save_as_h5:
+            # Preprocess graph
+            process_objects = fill_na_in_objects(objects)
+            process_objects = remove_non_numeric_columns_objects(process_objects)
+            process_objects = standardise_and_scale(process_objects)
+            save_to_h5(h5_filepath, process_objects, connections)
+            return objects, connections
+        
+        else:
+            return objects, connections
+        
+            
+        

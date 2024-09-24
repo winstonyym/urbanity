@@ -1,8 +1,12 @@
 # Map class utility functions
 import os
+import io
+import h5py
 import json
+import pandas as pd
 import pkg_resources
 import geopandas as gpd
+from shapely import wkt
 from shapely.geometry import LineString
 from urbanity.geom import project_gdf
 import numpy as np
@@ -10,6 +14,7 @@ from IPython.display import display
 from ipyleaflet import DrawControl
 from urllib.error import HTTPError
 from collections import Counter
+
 
 def get_country_centroids():
     """Utility function to obtain country centroids based on country name.
@@ -156,7 +161,7 @@ def get_gadm(country, city, version = '4.1', max_level = 4, level_drop = 0):
             continue
     
     
-def get_building_to_building_edges(building_nodes, adj_column = ''):
+def get_building_to_building_edges(building_nodes, adj_column = '', add_reverse=True):
     # building_edges = get_building_to_building_edges(building_nodes, adj_column = '3-nn-idx')
     # Prepare edge index. First match with index position then convert to torch tensor. 
     start_list = []
@@ -168,11 +173,20 @@ def get_building_to_building_edges(building_nodes, adj_column = ''):
             
     start_index = np.array(start_list)
     end_index = np.array(end_list)
-    building_edges = np.stack([start_list, end_list], axis=1).transpose()
     
-    return building_edges
+    # Edge from main building to neighbouring buildings
+    building_to_building = np.stack([start_list, end_list], axis=1).transpose()
 
-def get_intersection_to_street_edges(intersections, streets):
+    # Add reverse edges
+    if add_reverse:
+
+        # Edge from neighbouring buildings to main building
+        building_rev_building = np.flip(building_to_building, axis=0)
+        return building_to_building, building_rev_building
+    
+    return building_to_building
+
+def get_intersection_to_street_edges(intersections, streets, add_reverse=True):
     # intersection_to_street_edges = get_intersection_to_street_edges(gdfs[1], gdfs[2])
     node_to_id = {}
     for i,node in enumerate(intersections['osmid']):
@@ -184,26 +198,40 @@ def get_intersection_to_street_edges(intersections, streets):
     start_index = np.array(start_node)
     end_index = np.array(end_node)
     intersection_to_street_edges = np.stack([start_index, end_index], axis=1).transpose()
+
+    # Add reverse edges
+    if add_reverse:
+
+        # Edge from neighbouring buildings to main building
+        street_to_intersection_edges = np.flip(intersection_to_street_edges, axis=0)
+        return intersection_to_street_edges, street_to_intersection_edges
     
     return intersection_to_street_edges
 
-def get_buildings_in_plot_edges(urban_plots, adj_column = ''):
+def get_buildings_in_plot_edges(urban_plots, adj_column = '', add_reverse=True):
     # building_in_plot_edges = get_buildings_in_plot_edges(urban_plots, adj_column = 'building_ids')
     # Prepare edge index. First match with index position then convert to torch tensor. 
     start_list = []
     end_list = []
     for i, neighbours in enumerate(urban_plots[adj_column]):
-        for k in neighbours:
-            start_list.append(i)
-            end_list.append(k)
+        if neighbours != 0:
+            for k in neighbours:
+                start_list.append(i)
+                end_list.append(k)
             
     start_index = np.array(start_list)
     end_index = np.array(end_list)
-    building_in_plot_edges = np.stack([start_list, end_list], axis=1).transpose()
-    
-    return building_in_plot_edges
+    building_to_plot_edges = np.stack([end_index, start_index], axis=1).transpose()
 
-def get_edges_along_plot(urban_plots, adj_column = ''):
+    if add_reverse:
+
+        # Edge from neighbouring buildings to main building
+        plot_to_building_edges = np.flip(building_to_plot_edges, axis=0)
+        return building_to_plot_edges, plot_to_building_edges
+    
+    return building_to_plot_edges
+
+def get_edges_along_plot(urban_plots, adj_column = '', add_reverse=True):
     # edges_along_plot = get_edges_along_plot(urban_plots, adj_column = 'edge_ids')
     # Prepare edge index. First match with index position then convert to torch tensor. 
     start_list = []
@@ -215,11 +243,17 @@ def get_edges_along_plot(urban_plots, adj_column = ''):
             
     start_index = np.array(start_list)
     end_index = np.array(end_list)
-    edges_along_plot = np.stack([start_list, end_list], axis=1).transpose()
-    
-    return edges_along_plot
+    edges_to_plot = np.stack([end_index, start_index], axis=1).transpose()
 
-def get_plot_to_plot_edges(urban_plots):
+    if add_reverse:
+
+    # Edge from neighbouring buildings to main building
+        plot_to_edges = np.flip(edges_to_plot, axis=0)
+        return edges_to_plot, plot_to_edges
+    
+    return edges_to_plot
+
+def get_plot_to_plot_edges(urban_plots, add_reverse=True):
     """Helper function to generate network edges between urban plots and their adjacent plots.
 
     Args:
@@ -232,7 +266,6 @@ def get_plot_to_plot_edges(urban_plots):
     urban_plots['nn_plot_ids'] = None
 
     for index, plot in urban_plots.iterrows():   
-
         # get 'not disjoint' countries
         neighbors = urban_plots[~urban_plots.geometry.disjoint(plot.geometry)].plot_id.tolist()
 
@@ -252,12 +285,21 @@ def get_plot_to_plot_edges(urban_plots):
             
     start_index = np.array(start_list)
     end_index = np.array(end_list)
-    plot_to_plot_edges = np.stack([start_list, end_list], axis=1).transpose()
 
-    return plot_to_plot_edges
+    # Edge from main plot to neighbouring plots
+    plot_to_plot = np.stack([start_list, end_list], axis=1).transpose()
+
+    # Add reverse edges
+    if add_reverse:
+
+        # Edge from neighbouring plot to main plot
+        plot_rev_plot = np.flip(plot_to_plot, axis=0)
+        return plot_to_plot, plot_rev_plot
+
+    return plot_to_plot
 
 
-def get_building_to_street_edges(streets, building_nodes):
+def get_building_to_street_edges(streets, building_nodes, add_reverse=True):
     """Helper function to generate network edges between buildings and their adjacent (nearest; subject to distance threshold of 50 metres) streets.
 
     Args:
@@ -268,6 +310,7 @@ def get_building_to_street_edges(streets, building_nodes):
         np.array: A (2, N) array where the first row corresponds to street IDs and the second row corresponds building_node IDs. N is the number of edges between all streets and buildings. 
     """    
     # street_to_building = get_building_to_street_edges(gdfs[2], building_nodes)
+    building_nodes = project_gdf(building_nodes)
     building_nodes_copy = building_nodes.copy()
     building_nodes_copy['centroid'] = building_nodes.geometry.centroid
     building_nodes_copy = building_nodes_copy.set_geometry('centroid')
@@ -288,9 +331,14 @@ def get_building_to_street_edges(streets, building_nodes):
             
     start_index = np.array(start_list)
     end_index = np.array(end_list)
-    street_to_building = np.stack([start_list, end_list], axis=1).transpose()
+    building_to_street = np.stack([end_index, start_index], axis=1).transpose()
 
-    return street_to_building
+    # Add reverse edges
+    if add_reverse:
+        street_to_building = np.flip(building_to_street, axis=0)
+        return building_to_street, street_to_building
+    
+    return building_to_street
 
 def get_edge_nodes(edges) -> [gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Converts street segments into nodes as part of a multi-nodal graph representation.
@@ -375,3 +423,112 @@ def most_frequent(List):
     """    
     occurence_count = Counter(List)
     return occurence_count.most_common(1)[0][0]
+
+def save_to_h5(filepath, gdf_dict, array_dict):
+
+    # Save to HDF5 file
+    with h5py.File(filepath, 'w') as f:
+
+        for gdf_key, gdf_data in gdf_dict.items():
+            if isinstance(gdf_data, np.ndarray):
+                f.create_dataset(gdf_key, data=gdf_data)
+            else:
+                # Save geodataframes as tables (convert to CSV or similar format for storage)
+                f.create_dataset(gdf_key, data=gdf_data.to_csv(index=False).encode())
+
+        for array_key, array_data in array_dict.items():
+            f.create_dataset(array_key, data=array_data)
+
+def load_from_h5(filepath):
+    connections = {}
+    objects = {}
+    with h5py.File(filepath, 'r') as f:
+
+        for k in f.keys():
+            if 'edges' not in k:
+                df = pd.read_csv(io.StringIO(f[k][()].decode()), sep=",")
+                gdf = gpd.GeoDataFrame(data=df, crs = 'EPSG:4326', geometry=df['geometry'].apply(wkt.loads))
+                objects[k] = gdf
+            else:
+                connections[k] = f[k][:]
+
+    return objects, connections
+        
+        
+def fill_na_in_objects(objects):
+
+    for key, object in objects.items():
+        na_cols = []
+        for col in object.columns:
+            if sum(object[col].isna()) != 0:
+                na_cols.append(col)
+        
+        for missing_col in na_cols:
+            temp_mean = object[missing_col].mean()
+
+            # Fill NaN values and assign back to the DataFrame
+            object[missing_col] = object[missing_col].fillna(value=temp_mean)
+        
+        objects[key] = object
+        
+    return objects
+
+def one_hot_encode_categorical(df, target_col = '', prefix = ''):
+    '''Helper function to convert categorical column into numerical binary columns. 
+    Prefix is added to distinguish between categories.'''
+    df_dummies = pd.get_dummies(df[target_col], prefix=prefix)
+    df = df.drop(columns=[target_col], axis=1)
+    df = df.join(df_dummies)
+    return df
+
+
+def remove_non_numeric_columns_objects(objects):
+    
+    numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']
+
+    for key, object in objects.items():
+        only_numerics = object.select_dtypes(include=numerics)
+
+        if key == 'intersections':
+            only_numerics = only_numerics.drop(columns = ['intersection_id', 'osmid', 'x', 'y'], axis=1)
+        elif key == 'urban_plots':
+            only_numerics = only_numerics.drop(columns = ['plot_id'], axis=1)
+        elif key == 'buildings':
+            only_numerics = only_numerics.drop(columns = ['bid'], axis=1)
+        elif key == 'streets':
+            only_numerics = only_numerics.drop(columns = ['edge_id'], axis=1)
+            
+        objects[key] = only_numerics
+
+    return objects
+
+def standardise_and_scale(objects):
+    '''Helper function to scale dataframes. '''
+
+    from sklearn.compose import ColumnTransformer
+    from sklearn.preprocessing import StandardScaler
+    
+    scale = StandardScaler()
+
+    for key, df in objects.items():
+        all_columns = list(df.columns)
+        boolean_mask = (df.dtypes == 'bool').values
+        numeric_columns = [i for idx, i in enumerate(all_columns) if ~boolean_mask[idx]]
+
+        ct = ColumnTransformer([
+            ('somename', StandardScaler(), numeric_columns)
+        ], remainder='passthrough')
+
+        objects[key] = ct.fit_transform(df)
+
+    return objects
+    
+
+def add_super_node(objects, connections, gdf, target = 'plot', name = 'boundary'):
+    '''Helper function to add super node to graph. Specify target to create links to specific layer'''
+    objects[name] = gdf
+    edge_connections = np.zeros((2, len(objects[target])))
+    edge_connections[0, :] = np.arange(len(objects[target]))
+    connections[f'{target}_to_{name}'] = edge_connections.astype(int)
+
+    return objects, connections
