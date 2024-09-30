@@ -1,5 +1,7 @@
 # import base packages
+import os
 import json
+import glob
 import zipfile
 import requests
 import pkg_resources
@@ -7,11 +9,16 @@ from io import BytesIO
 
 # import external packages
 import rasterio
+from rasterio import features
 from rasterio.windows import Window
+from rasterio.mask import mask
+from rasterio.io import MemoryFile
+
 import pandas as pd
 import geopandas as gpd
 import numpy as np
 from shapely.geometry import Polygon
+from scipy.stats import skew, kurtosis
 
 
 # import package functions and classes
@@ -128,7 +135,7 @@ def get_tiled_population_data(country: str, bounding_poly = None, all_only = Fal
         target_cols.append('population')
     return groups_df, target_cols
 
-def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary=None):
+def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary=None, same_geometry=False):
     """Helper function to convert a raster dataset (.tiff) to GeoDataFrame object.
 
     Args:
@@ -163,6 +170,12 @@ def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary
         y_width = len(list_y_range)
         x_off = np.where(xarray == list_x_range[0])[0].item()
         y_off = np.where(yarray == list_y_range[0])[0].item()
+        
+        if same_geometry: 
+            # Read windowed raster view
+            with rasterio.open(raster_path) as src:
+                value_array = src.read(1, window=Window(x_off, y_off, x_width-1, y_width-1))
+            return pd.DataFrame({'value':np.ravel(value_array, order='C')})
 
         geom_list = []
         for y_i in range(len(list_y_range)-1):
@@ -239,3 +252,120 @@ def csv2grid(filepath, lat_col = 'Y', lon_col = 'X'):
     gdf = gpd.GeoDataFrame(data = df, crs = 'epsg:4326', geometry = geom_list)
     
     return gdf
+
+
+def extract_tiff_from_shapefile(geotiff_path, shapefile, output_filepath=None, zipped=True):
+
+    if zipped:
+        with zipfile.ZipFile(geotiff_path, 'r') as zip_ref:
+            zip_ref.extractall(os.path.dirname(geotiff_path))
+
+        os.remove(geotiff_path)
+        geotiff_path = geotiff_path[:-4]
+
+    # Get geotiff info and mask with shapefile
+    with rasterio.open(geotiff_path, 'r') as data:
+        out_image, out_transform = rasterio.mask.mask(data, shapes=[shapefile.geometry[0]], crop=True)
+        out_meta = data.meta
+  
+
+    # Set transformation of geotiff
+    out_meta.update({"driver": "GTiff",
+                     "height": out_image.shape[1],
+                     "width": out_image.shape[2],
+                     "transform": out_transform})
+    
+    # If output_filepath, write to disk
+    if output_filepath:
+        with rasterio.open(output_filepath, "w", **out_meta) as dest:
+            dest.write(out_image)
+    else:
+        with MemoryFile() as memfile:
+            with memfile.open(**out_meta) as dataset:
+                dataset.write(out_image)
+                
+                # Read the data from the in-memory dataset
+                data_array = dataset.read(1)
+                data_array = np.nan_to_num(data_array, nan=0)
+                
+        return data_array
+    
+
+def get_population_tif_from_coords(pop_folder, subgroup, lat, long):
+    tif_files = glob.glob(os.path.join(pop_folder, '*'))
+    
+    # Get intervals
+    if subgroup=='population':
+        lat_intervals = [int(os.path.basename(path).split('_')[2]) for path in tif_files if subgroup in path]
+        long_intervals = [int(os.path.basename(path).split('_')[3]) for path in tif_files if subgroup in path]
+    else:   
+        lat_intervals = [int(os.path.basename(path).split('_')[2]) for path in tif_files if subgroup in path]
+        long_intervals = [int(os.path.basename(path).split('_')[4]) for path in tif_files if subgroup in path]
+
+    snapped_lat = max((x for x in lat_intervals if x <= lat), default=None)
+    snapped_long = max((x for x in long_intervals if x <= long), default=None)
+
+    targets = [subgroup, str(snapped_lat), str(snapped_long)]
+
+    if subgroup == 'men':
+        for path in tif_files:
+            if all(x in path for x in targets) and ('women' not in path):
+                return path
+    else:
+        for path in tif_files:
+            if all(x in path for x in targets):
+                return path
+            
+
+def load_npz_as_raster(npz_file):
+    data = np.load(npz_file, allow_pickle=True)
+    mosaic = data['mosaic']
+    meta = data['meta'].item()  # Convert from structured array to dict if needed
+    
+    return mosaic, meta
+
+def mask_raster_with_gdf(gdf, raster, meta):
+    gdf_proj = gdf.copy()
+
+    if gdf.crs != meta['crs']:
+        gdf_proj = gdf.copy()
+        gdf_proj = gdf_proj.to_crs(meta['crs'])
+
+    # Raster stats
+    geom = gdf_proj[['geometry','plot_id']].values.tolist()
+
+    fields_rasterized = features.rasterize(geom, 
+                                       out_shape=raster[0].shape, 
+                                       transform=meta['transform'])
+    
+    categories = np.unique(fields_rasterized)
+
+    # Dictionary to store the average values for each category
+    statistics = {
+        'canopy_mean':{},
+        'canopy_stdev':{},
+        'canopy_skewness':{},
+        'canopy_kurtosis':{}
+    }
+
+    # Calculate the average for each category
+    for category in categories:
+        if category != 0:  # Assuming 0 is the background/no data
+            mask = (fields_rasterized == category)
+
+            average = raster[0][mask].mean() 
+            statistics['canopy_mean'][category] = average
+
+            stdev = raster[0][mask].std() 
+            statistics['canopy_stdev'][category] = stdev
+
+            skewness = skew(raster[0][mask])
+            statistics['canopy_skewness'][category] = skewness
+
+            kurtosisness = kurtosis(raster[0][mask])
+            statistics['canopy_kurtosis'][category] = kurtosisness
+
+    canopy_df = pd.DataFrame.from_dict({k:v for k,v in statistics.items()})
+    canopy_df['plot_id'] = canopy_df.index
+
+    return canopy_df

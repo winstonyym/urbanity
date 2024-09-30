@@ -27,7 +27,7 @@ from .utils import get_country_centroids, finetune_poi, get_available_precompute
 
 from .geom import *
 from .building import *
-from .population import get_population_data, get_tiled_population_data, raster2gdf
+from .population import get_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, get_population_tif_from_coords, load_npz_as_raster, mask_raster_with_gdf
 from .topology import compute_centrality, merge_nx_property, merge_nx_attr
 
 # import external functions and classes
@@ -42,6 +42,7 @@ import ipyleaflet
 from ipyleaflet import basemaps, basemap_to_tiles, Icon, Marker, LayersControl, LayerGroup, DrawControl, FullScreenControl, ScaleControl, LocalTileLayer, GeoData
 import pyrosm
 from pyrosm import get_data
+from scipy.stats import entropy
 
 # Import country coords
 country_dict = get_country_centroids()
@@ -2865,6 +2866,9 @@ class Map(ipyleaflet.Map):
             svi_filepath: str,
             building_filepath: str,
             poi_filepath: str, 
+            lcz_filepath: str,
+            canopy_filepath: str,
+            pop_filepath: str, 
             bandwidth: int = 100,
             minimum_area: int = 30,
             knn: list = [3],
@@ -2884,6 +2888,9 @@ class Map(ipyleaflet.Map):
             svi_filepath (str): Specify path to street view imagery file.
             building_filepath (str): Specify path to overture building footprint file.
             poi_filepath (str): Specify path to overture poi file.
+            canopy_filepath (str): Specify path to canopy heights raster file.
+            lcz_filepath (str): Specify path to lcz raster file.
+            pop_filepath (str): Specify path to population folder. 
             bandwidth (int): Distance to extract information beyond network. Defaults to 100.
             minimum_area (int): Specifies minimum plot area to filter small urban plots (e.g. small polygons formed by road intersection).
             knn (list): Specifies the number of neighbours for each building to form building to building edges.
@@ -3028,14 +3035,18 @@ class Map(ipyleaflet.Map):
             # Proportion
             count_cols = [col for col in svi_data.columns if 'counts' in col]
             score_cols = [col for col in svi_data.columns if 'score' in col]
-
             pixel_cols = [col for col in svi_data.columns if 'pixels' in col]
             svi_data[pixel_cols] = svi_data[pixel_cols].div(svi_data['Total'], axis=0)
+
+            # Add visual entropy
+            svi_data['visual_complexity'] = svi_data[pixel_cols].apply(lambda row: entropy(row), axis=1)
+
 
             # Groupby edge
             aggr_svi_score = svi_data.groupby(['uv'])[score_cols].aggregate('mean')
             aggr_svi_pixels = svi_data.groupby(['uv'])[pixel_cols].aggregate('mean')
             aggr_svi_count = svi_data.groupby(['uv'])[count_cols].aggregate('mean')
+            aggr_svi_complexity = svi_data.groupby(['uv'])['visual_complexity'].aggregate('mean')
 
             # Join pixel mean to network edges
             edges = edges.merge(aggr_svi_score, on='uv', how='left')
@@ -3049,12 +3060,15 @@ class Map(ipyleaflet.Map):
             edges = edges.merge(aggr_svi_count, on='uv', how='left')
             edges[count_cols] = edges[count_cols].fillna(edges[count_cols].mean())
 
+            # Join count mean to network edges
+            edges = edges.merge(aggr_svi_complexity, on='uv', how='left')
+            edges['visual_complexity'] = edges['visual_complexity'].fillna(edges['visual_complexity'].mean())
+
             # Add SVI counts
             edge_svi_count_series = svi_data['uv'].value_counts()
             edge_svi_count_series.name = 'Number_of_SVI'
             edges = edges.merge(edge_svi_count_series, on='uv', how='left')
             edges['Number_of_SVI'] = edges['Number_of_SVI'].replace(np.nan, 0)
-
 
             print(f'SVI attributes computed. Time taken: {round(time.time() - start)}.')
             
@@ -3196,6 +3210,16 @@ class Map(ipyleaflet.Map):
 
             urban_plots = urban_plots.to_crs('EPSG:4326')
 
+             # Add canopy height
+            canopy_vars = ['canopy_mean', 'canopy_stdev', 'canopy_skewness', 'canopy_kurtosis']
+
+            mosaic, meta = load_npz_as_raster(canopy_filepath)
+
+            canopy_df = mask_raster_with_gdf(urban_plots, mosaic, meta)
+
+            urban_plots = urban_plots.merge(canopy_df, on='plot_id', how='left')
+            urban_plots[canopy_vars] = urban_plots[canopy_vars].fillna(0)
+
             # Add building id to plot
             building_urban_plots_intersection = buildings.overlay(urban_plots)
             urban_plots['bid'] = building_urban_plots_intersection.groupby('plot_id')[['bid']].aggregate(lambda x: list(x))
@@ -3241,15 +3265,64 @@ class Map(ipyleaflet.Map):
             pois_df = pd.DataFrame(index = poi_series.index, data = poi_series.values).reset_index()
             pois_df = pd.pivot(pois_df, index='plot_id', columns='Category', values=0).fillna(0)
 
-            urban_plots = urban_plots.merge(pois_df, on='plot_id', how='left')
-
             for i in poi_columns:
-                if i not in set(pois.columns):
-                    pois[i] = 0
-                elif i in set(pois.columns):
-                    pois[i] = pois[i].replace(np.nan, 0)
+                if i not in set(pois_df.columns):
+                    pois_df[i] = 0
+                elif i in set(pois_df.columns):
+                    pois_df[i] = pois_df[i].replace(np.nan, 0)
 
-            self.urban_plots = urban_plots
+            urban_plots = urban_plots.merge(pois_df, on='plot_id', how='left')
+            urban_plots[poi_columns] = urban_plots[poi_columns].fillna(0)
+
+            # Add LCZ
+            lcz_array = raster2gdf(lcz_filepath, zoom=True, boundary=self.polygon_bounds, same_geometry=False)
+            res_intersection = lcz_array.overlay(urban_plots)
+            lcz_series = res_intersection.groupby('plot_id')['value'].value_counts()
+
+            lcz_df = pd.DataFrame(index = lcz_series.index, data = lcz_series.values).reset_index()
+            lcz_df = pd.pivot(lcz_df, index='plot_id', columns='value', values=0).fillna(0)
+
+            # Rename columns
+            lcz_df.columns = ['lcz_' + str(col) for col in lcz_df.columns]
+
+            lcz_column_names = ['lcz_'+str(i) for i in range(1,18)]
+            for i in lcz_column_names:
+                if i not in set(lcz_df.columns):
+                    lcz_df[i] = 0
+                elif i in set(lcz_df.columns):
+                    lcz_df[i] = lcz_df[i].replace(np.nan, 0)
+
+            # Join pixel mean to network edges
+            urban_plots = urban_plots.merge(lcz_df, on='plot_id', how='left')
+            urban_plots[lcz_column_names] = urban_plots[lcz_column_names].fillna(0)
+
+            # Add population
+            lat, long = self.polygon_bounds.geometry.centroid[0].y, self.polygon_bounds.geometry.centroid[0].x
+
+            pop_subgroups = ['population', 'children', 'youth', 'elderly', 'men', 'women']
+
+
+            for i, subgroup in enumerate(pop_subgroups):
+                subgroup_tif_fp = get_population_tif_from_coords(pop_filepath, subgroup, lat, long)
+
+                if i == 0:
+                    subgroup_pop_gdf = raster2gdf(subgroup_tif_fp, zoom=True, boundary=self.polygon_bounds, same_geometry=False)
+                    subgroup_pop_gdf = subgroup_pop_gdf.fillna(0)
+                    subgroup_pop_gdf = subgroup_pop_gdf.rename(columns={'value':subgroup})
+                else: 
+                    new_pop_gdf = raster2gdf(subgroup_tif_fp, zoom=True, boundary=self.polygon_bounds, same_geometry=True)
+                    new_pop_gdf = new_pop_gdf.fillna(0)
+                    new_pop_gdf = new_pop_gdf.rename(columns={'value':subgroup})   
+                    subgroup_pop_gdf = pd.concat([subgroup_pop_gdf, new_pop_gdf], axis=1)
+
+            res_intersection = gpd.sjoin(subgroup_pop_gdf, urban_plots, how='inner')
+
+            subgroup_pop_series = res_intersection.groupby('plot_id')[['population','men','women','elderly','youth','children']].aggregate('sum')
+
+            # Join pixel mean to network edges
+            urban_plots = urban_plots.merge(subgroup_pop_series, on='plot_id', how='left')
+            urban_plots[['population','men','women','elderly','youth','children']] = urban_plots[['population','men','women','elderly','youth','children']].fillna(0)
+       
             print(f'Urban plots constructed. Time taken: {round(time.time() - start)}.')
 
         # Get edge connections
