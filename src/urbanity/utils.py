@@ -502,6 +502,7 @@ def remove_non_numeric_columns_objects(objects):
 
     return objects
 
+
 def standardise_and_scale(objects):
     '''Helper function to scale dataframes. '''
 

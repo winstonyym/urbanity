@@ -19,17 +19,6 @@ from unittest import skip
 import pkg_resources
 from webbrowser import get
 
-# import module functions and classes
-from .utils import get_country_centroids, finetune_poi, get_available_precomputed_network_data, most_frequent, get_plot_to_plot_edges, \
-                    get_building_to_street_edges, get_edge_nodes, get_building_to_building_edges, get_intersection_to_street_edges, \
-                    get_buildings_in_plot_edges, get_edges_along_plot, add_super_node, remove_non_numeric_columns_objects, standardise_and_scale, \
-                    fill_na_in_objects, one_hot_encode_categorical, save_to_h5 
-
-from .geom import *
-from .building import *
-from .population import get_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, get_population_tif_from_coords, load_npz_as_raster, mask_raster_with_gdf
-from .topology import compute_centrality, merge_nx_property, merge_nx_attr
-
 # import external functions and classes
 import networkit
 import numpy as np
@@ -43,6 +32,18 @@ from ipyleaflet import basemaps, basemap_to_tiles, Icon, Marker, LayersControl, 
 import pyrosm
 from pyrosm import get_data
 from scipy.stats import entropy
+
+# import module functions and classes
+from .utils import get_country_centroids, finetune_poi, get_available_precomputed_network_data, most_frequent, get_plot_to_plot_edges, \
+                    get_building_to_street_edges, get_edge_nodes, get_building_to_building_edges, get_intersection_to_street_edges, \
+                    get_buildings_in_plot_edges, get_edges_along_plot, add_super_node, remove_non_numeric_columns_objects, standardise_and_scale, \
+                    fill_na_in_objects, one_hot_encode_categorical, save_to_h5
+
+from .geom import *
+from .building import *
+from .population import get_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, get_population_tif_from_coords, load_npz_as_raster, mask_raster_with_gdf
+from .topology import compute_centrality, merge_nx_property, merge_nx_attr
+
 
 # Import country coords
 country_dict = get_country_centroids()
@@ -484,10 +485,9 @@ class Map(ipyleaflet.Map):
             # catch when it hasn't even been defined 
             except (AttributeError, NameError):
                 raise Exception('Please delimit a bounding box.')
-
+            
             # Obtain nodes and edges within buffered polygon
             osm = pyrosm.OSM(fp, bounding_box=buffered_bbox)
-            
             nodes, edges = osm.get_network(network_type=network_type, nodes=True)
 
             # Build networkx graph for pre-processing
@@ -2937,10 +2937,10 @@ class Map(ipyleaflet.Map):
             osm = pyrosm.OSM(network_filepath, bounding_box=buffered_bbox)
             
             nodes, edges = osm.get_network(network_type=network_type, nodes=True)
-
+            
             # Build networkx graph for pre-processing
             G_buff = osm.to_graph(nodes, edges, graph_type="networkx", force_bidirectional=True, retain_all=True)
-            
+
             # Add great circle length to network edges
             G_buff = add_edge_lengths(G_buff)
 
@@ -2972,7 +2972,7 @@ class Map(ipyleaflet.Map):
             # Remove self loops
             G_buff_trunc_loop = G_buff_trunc.copy()
             G_buff_trunc_loop.remove_edges_from(nx.selfloop_edges(G_buff_trunc_loop))
-
+            
             nodes, edges = graph_to_gdf(G_buff_trunc_loop, nodes=True, edges=True)
 
             # Fill NA and drop incomplete columns
@@ -2980,7 +2980,7 @@ class Map(ipyleaflet.Map):
             edges = edges.fillna('')
             nodes = nodes.drop(columns=['osmid','tags','timestamp','version','changeset']).reset_index()
             edges = edges.reset_index()[['u','v','length','geometry']]
-
+    
             # Assign unique IDs
             nodes['intersection_id'] = nodes.index
             nodes = nodes[['intersection_id','osmid', 'x', 'y', 'geometry']]
@@ -2992,6 +2992,7 @@ class Map(ipyleaflet.Map):
             self.network.append(nodes)
             self.network.append(edges)
 
+
             # Add network attributes
             proj_nodes = project_gdf(nodes)
             proj_edges = project_gdf(edges)
@@ -2999,18 +3000,20 @@ class Map(ipyleaflet.Map):
             # Buffer around nodes
             nodes_buffer = proj_nodes.copy()
             nodes_buffer['geometry'] = nodes_buffer.geometry.buffer(bandwidth)
-                
+
             res_intersection = proj_nodes.overlay(nodes_buffer, how='intersection')
             res_intersection['num_nodes'] = 1
             # Use intersection_id_2 because of node-node_buffer intersection
             nodes["intersection_num_nodes"] = res_intersection.groupby(['intersection_id_2'])['num_nodes'].sum().values
             
             # Add Street Length
+            
             res_intersection = proj_edges.overlay(nodes_buffer, how='intersection')
             res_intersection['street_len'] = res_intersection.geometry.length
+            
             nodes["intersection_total_street_length"] = res_intersection.groupby(['intersection_id'])['street_len'].sum().values
             nodes["intersection_total_street_length"] = nodes["intersection_total_street_length"].round(3)
-
+            
             # Add Degree Centrality, Clustering (Weighted and Unweighted)
             nodes = merge_nx_property(nodes, G_buff_trunc_loop.out_degree, 'intersection_degree')
             nodes = merge_nx_attr(G_buff_trunc_loop, nodes, nx.clustering, 'intersection_clustering')
@@ -3022,7 +3025,7 @@ class Map(ipyleaflet.Map):
             nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.EigenvectorCentrality, 'Eigenvector Centrality')
             nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.KatzCentrality, 'Katz Centrality')
             nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.PageRank, 'PageRank', 0.85, 1e-8, networkit.centrality.SinkHandling.NoSinkHandling, True)
-
+            
             print(f'Network constructed. Time taken: {round(time.time() - start)}.')
 
             # Add SVI to edges
@@ -3280,18 +3283,23 @@ class Map(ipyleaflet.Map):
             lcz_series = res_intersection.groupby('plot_id')['value'].value_counts()
 
             lcz_df = pd.DataFrame(index = lcz_series.index, data = lcz_series.values).reset_index()
+            # return lcz_df
             lcz_df = pd.pivot(lcz_df, index='plot_id', columns='value', values=0).fillna(0)
+                    
+            # Sum across rows to get total for each row
+            row_totals = lcz_df.sum(axis=1)
+            lcz_df = lcz_df.div(row_totals, axis=0) * 100
 
             # Rename columns
             lcz_df.columns = ['lcz_' + str(col) for col in lcz_df.columns]
 
-            lcz_column_names = ['lcz_'+str(i) for i in range(1,18)]
+            lcz_column_names = ['lcz_'+str(i) for i in range(0,18)]
             for i in lcz_column_names:
                 if i not in set(lcz_df.columns):
                     lcz_df[i] = 0
                 elif i in set(lcz_df.columns):
                     lcz_df[i] = lcz_df[i].replace(np.nan, 0)
-
+            
             # Join pixel mean to network edges
             urban_plots = urban_plots.merge(lcz_df, on='plot_id', how='left')
             urban_plots[lcz_column_names] = urban_plots[lcz_column_names].fillna(0)
@@ -3300,7 +3308,6 @@ class Map(ipyleaflet.Map):
             lat, long = self.polygon_bounds.geometry.centroid[0].y, self.polygon_bounds.geometry.centroid[0].x
 
             pop_subgroups = ['population', 'children', 'youth', 'elderly', 'men', 'women']
-
 
             for i, subgroup in enumerate(pop_subgroups):
                 subgroup_tif_fp = get_population_tif_from_coords(pop_filepath, subgroup, lat, long)
@@ -3322,7 +3329,11 @@ class Map(ipyleaflet.Map):
             # Join pixel mean to network edges
             urban_plots = urban_plots.merge(subgroup_pop_series, on='plot_id', how='left')
             urban_plots[['population','men','women','elderly','youth','children']] = urban_plots[['population','men','women','elderly','youth','children']].fillna(0)
-       
+            
+            urban_plots['geometry'] = urban_plots.make_valid()
+
+            self.urban_plots = urban_plots
+
             print(f'Urban plots constructed. Time taken: {round(time.time() - start)}.')
 
         # Get edge connections
@@ -3348,6 +3359,7 @@ class Map(ipyleaflet.Map):
 
         if save_as_h5:
             # Preprocess graph
+    
             process_objects = fill_na_in_objects(objects)
             process_objects = remove_non_numeric_columns_objects(process_objects)
             process_objects = standardise_and_scale(process_objects)
