@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "urbanity"
-version = "0.4.2"
+version = "0.4.3"
 description = ""
 authors = ["winstonyym <winstonyym@u.nus.edu>"]
 license = "MIT"
@@ -27,8 +27,8 @@ pydeck = "^0.9.1"
 
 [tool.poetry.dev-dependencies]
 jupyter = "^1.0.0"
-myst-nb = "^0.17.1"
-sphinx-autoapi = "^2.0.0"
+myst-nb = "1.1.2"
+sphinx-autoapi = "3.0.0"
 sphinx-rtd-theme = "^1.0.0"
 
 [build-system]
