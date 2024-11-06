@@ -11,7 +11,6 @@ dependencies:
   - rasterio
   - contextily
   - pyarrow
-  - networkit
   - pip:
     - urbanity==0.4.2
 prefix: /Users/winston/miniconda3/envs/urbanity

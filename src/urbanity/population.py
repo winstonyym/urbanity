@@ -17,7 +17,7 @@ from rasterio.io import MemoryFile
 import pandas as pd
 import geopandas as gpd
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import box, Polygon
 from scipy.stats import skew, kurtosis
 
 
@@ -290,31 +290,116 @@ def extract_tiff_from_shapefile(geotiff_path, shapefile, output_filepath=None, z
                 
         return data_array
     
+def is_bounding_box_within(bounds, box):
+    """
+    Check if the bounding box is within the raster bounds.
 
-def get_population_tif_from_coords(pop_folder, subgroup, lat, long):
+    Parameters:
+    bounds: Tuple[float, float, float, float] - (min_x, min_y, max_x, max_y)
+    box: Tuple[float, float, float, float] - (xmin, ymin, xmax, ymax)
+
+    Returns:
+    bool - True if box is within bounds, False otherwise
+    """
+    min_x, min_y, max_x, max_y = bounds
+    xmin, ymin, xmax, ymax = box
+    
+    return (xmin >= min_x and 
+            ymin >= min_y and 
+            xmax <= max_x and 
+            ymax <= max_y)
+
+def is_overlapped_with_bounding_box(bounds, box):
+    """
+    Check if there is any spatial overlap between the bounding box and the raster bounds.
+
+    Parameters:
+    bounds: Tuple[float, float, float, float] - (min_x, min_y, max_x, max_y)
+    box: Tuple[float, float, float, float] - (xmin, ymin, xmax, ymax)
+
+    Returns:
+    bool - True if there is any overlap between box and bounds, False otherwise
+    """
+    min_x, min_y, max_x, max_y = bounds
+    xmin, ymin, xmax, ymax = box
+    
+    return not (xmax < min_x or 
+                xmin > max_x or 
+                ymax < min_y or 
+                ymin > max_y)
+
+def find_valid_tif_files(filepaths, bounding_box):
+    """
+    Open raster TIFF files and check if bounding box falls within the raster bounds.
+
+    Parameters:
+    filepaths: List[str] - List of TIFF file paths
+    bounding_box: Tuple[float, float, float, float] - (xmin, ymin, xmax, ymax)
+
+    Returns:
+    List[str] - List of valid file paths where the bounding box is within the raster
+    """
+    valid_files = []
+
+    for filepath in filepaths:
+        with rasterio.open(filepath) as src:
+            # Get the bounds of the raster
+            bounds = src.bounds
+            
+            # Check if the bounding box is within the raster bounds
+            if is_overlapped_with_bounding_box(bounds, bounding_box):
+                valid_files.append(filepath)
+
+    return valid_files
+
+def get_population_tif_from_coords(pop_folder, subgroup, long_min, lat_min, long_max, lat_max):
     tif_files = glob.glob(os.path.join(pop_folder, '*'))
     
     # Get intervals
     if subgroup=='population':
-        lat_intervals = [int(os.path.basename(path).split('_')[2]) for path in tif_files if subgroup in path]
-        long_intervals = [int(os.path.basename(path).split('_')[3]) for path in tif_files if subgroup in path]
+        lat_intervals = np.unique([int(os.path.basename(path).split('_')[2]) for path in tif_files if subgroup in path])
+        long_intervals = np.unique([int(os.path.basename(path).split('_')[3]) for path in tif_files if subgroup in path])
     else:   
-        lat_intervals = [int(os.path.basename(path).split('_')[2]) for path in tif_files if subgroup in path]
-        long_intervals = [int(os.path.basename(path).split('_')[4]) for path in tif_files if subgroup in path]
+        lat_intervals = np.unique([int(os.path.basename(path).split('_')[2]) for path in tif_files if subgroup in path])
+        long_intervals = np.unique([int(os.path.basename(path).split('_')[4]) for path in tif_files if subgroup in path])
 
-    snapped_lat = max((x for x in lat_intervals if x <= lat), default=None)
-    snapped_long = max((x for x in long_intervals if x <= long), default=None)
+    # Check which rasters are needed
+    snapped_lat_min = max((x for x in lat_intervals if x <= lat_min), default=None)
+    snapped_long_min = max((x for x in long_intervals if x <= long_min), default=None)
+    snapped_lat_max = max((x for x in lat_intervals if x <= lat_max), default=None)
+    snapped_long_max = max((x for x in long_intervals if x <= long_max), default=None)
 
-    targets = [subgroup, str(snapped_lat), str(snapped_long)]
+    targets = [subgroup, str(snapped_lat_min), str(snapped_long_min)]
+    
+    if (snapped_lat_min != snapped_lat_max) or (snapped_lat_max != snapped_long_max):
+        targets2 = [subgroup, str(snapped_lat_max), str(snapped_long_max)]
 
+        path_list = []
+        if subgroup == 'men':
+
+            for path in tif_files:
+                if all(x in path for x in targets) and ('women' not in path):
+                    path_list.append(path)
+                if all(x in path for x in targets2) and ('women' not in path):
+                    path_list.append(path)
+            else:
+                for path in tif_files:
+                    if all(x in path for x in targets):
+                        path_list.append(path)
+                    if all(x in path for x in targets2):
+                        path_list.append(path)
+                    
+    path_list = []
     if subgroup == 'men':
         for path in tif_files:
             if all(x in path for x in targets) and ('women' not in path):
-                return path
+                path_list.append(path)
     else:
         for path in tif_files:
             if all(x in path for x in targets):
-                return path
+                path_list.append(path)
+                
+    return path_list
             
 
 def load_npz_as_raster(npz_file):
@@ -323,6 +408,169 @@ def load_npz_as_raster(npz_file):
     meta = data['meta'].item()  # Convert from structured array to dict if needed
     
     return mosaic, meta
+
+def split_raster_into_grids(raster):
+    # Get the dimensions of the original raster
+    rows, cols = raster.shape
+    
+    # Calculate the dimensions of the smaller grids
+    mid_row = rows // 4
+    mid_col = cols // 4
+    
+    # Create a list to hold the 16 smaller grids
+    grids = []
+
+    # Slice the original raster into 16 smaller grids
+    for i in range(4):  # 4 rows
+        for j in range(4):  # 4 columns
+            start_row = i * mid_row
+            start_col = j * mid_col
+            end_row = start_row + mid_row if i < 3 else rows  # Handle last slice
+            end_col = start_col + mid_col if j < 3 else cols  # Handle last slice
+            grid = raster[start_row:end_row, start_col:end_col]
+            grids.append(grid)
+    
+    return grids
+
+def subset_raster_from_coords(gdf, xarray, yarray, safety_value, raster_category, raster_values, category):
+    xmin, ymin, xmax, ymax = gdf.iloc[[category]].total_bounds
+
+    # Get raster offsets, width, and height
+    list_x_range = [i for i in list(xarray) if i >= xmin-safety_value if i <=xmax+safety_value]
+    list_y_range = [i for i in list(yarray) if i >= ymin-safety_value if i <=ymax+safety_value]
+    x_width = len(list_x_range)
+    y_width = len(list_y_range)
+    x_off = np.where(xarray == list_x_range[0])[0].item()
+    y_off = np.where(yarray == list_y_range[0])[0].item()
+
+    raster_values_subset = raster_values[0][y_off:(y_off+y_width), x_off:(x_off+x_width)]
+    raster_category_subset = raster_category[y_off:(y_off+y_width), x_off:(x_off+x_width)]
+
+    if (raster_category_subset.shape[0] > 50000) or (raster_category_subset.shape[1] > 50000):
+        print('Splitting large subset into sections.')
+
+        raster_category_splits = split_raster_into_grids(raster_category_subset)
+        raster_value_splits = split_raster_into_grids(raster_values_subset)
+        
+        total_value = 0
+        total_len = 0
+        for value_array, category_array in zip(raster_value_splits,raster_category_splits):
+            mask = (category_array==category)
+            values = value_array[mask]
+            total_len += len(values)
+            total_value += (values.sum())
+
+        average = total_value / total_len
+
+        total_deviation = 0
+        total_skewness = 0
+        for value_array, category_array in zip(raster_value_splits,raster_category_splits):
+            mask = (category_array==category)
+            values = value_array[mask]
+            total_deviation += np.sum(np.square(values - average))
+            total_skewness += np.sum(np.power(values - average, 3))
+
+        stdev = np.sqrt(total_deviation / total_len)
+        skewness = total_skewness / ((total_len - 1) * stdev)
+        kurtosisness = average / stdev
+
+    else: 
+        mask = (raster_category_subset==category)
+        average = raster_values_subset[mask].mean() 
+        stdev = raster_values_subset[mask].std() 
+        skewness = skew(raster_values_subset[mask])
+        kurtosisness = kurtosis(raster_values_subset[mask])
+
+    return average, stdev, skewness, kurtosisness
+
+
+def mask_raster_with_gdf_large_raster(gdf, raster, meta, tile_size=512):
+    gdf_proj = gdf.copy()
+
+    # Check and reproject the GeoDataFrame if needed
+    if gdf.crs != meta['crs']:
+        gdf_proj = gdf_proj.to_crs(meta['crs'])
+
+    # Prepare output raster
+    output_shape = raster[0].shape
+    output_raster = np.full(output_shape, fill_value=-1, dtype=np.int32)
+
+    # Iterate over the raster in tiles
+    for row in range(0, output_shape[0], tile_size):
+        for col in range(0, output_shape[1], tile_size):
+            # Define the tile bounds
+            row_min = row
+            row_max = min(row + tile_size, output_shape[0])
+            col_min = col
+            col_max = min(col + tile_size, output_shape[1])
+
+            # Define the transform for the current tile
+            transform = meta['transform'] * rasterio.Affine.translation(col_min, row_min)
+
+            # Create a bounding box polygon for the current tile
+            tile_bounds = box(
+                meta['transform'][2] + col_min * meta['transform'][0],
+                meta['transform'][5] + row_min * meta['transform'][4],
+                meta['transform'][2] + col_max * meta['transform'][0],
+                meta['transform'][5] + row_max * meta['transform'][4]
+            )
+
+            # Select geometries that intersect with the current tile
+            geometries = gdf_proj[gdf_proj.geometry.intersects(tile_bounds)]
+
+            # Rasterize the geometries for the current tile
+            if not geometries.empty:
+                geom = geometries[['geometry', 'plot_id']].values.tolist()
+                tile_rasterized = features.rasterize(
+                    geom,
+                    out_shape=(row_max - row_min, col_max - col_min),
+                    transform=transform,
+                    fill=-1
+                )
+                # Combine the tile back into the output raster
+                output_raster[row_min:row_max, col_min:col_max] = np.where(
+                    tile_rasterized != -1, tile_rasterized, output_raster[row_min:row_max, col_min:col_max]
+                )
+
+    # Dictionary to store the average values for each category
+    statistics = {
+        'canopy_mean':{},
+        'canopy_stdev':{},
+        'canopy_skewness':{},
+        'canopy_kurtosis':{}
+    }
+
+    if (raster[0].shape[0] > 50000) or (raster[0].shape[1] > 50000):
+        print('Large raster: using raster subset')
+        xarray = np.linspace(gdf.total_bounds[0], gdf.total_bounds[2],raster[0].shape[1]+1)
+        yarray = np.linspace(gdf.total_bounds[3], gdf.total_bounds[1],raster[0].shape[0]+1)
+        safety_value = 0.001
+
+        # Calculate the average for each category
+        for category in gdf_proj.index:
+            average, stdev, skewness, kurtosisness = subset_raster_from_coords(gdf, xarray, yarray, safety_value, output_raster, raster, category)
+
+            statistics['canopy_mean'][category] = average
+            statistics['canopy_stdev'][category] = stdev
+            statistics['canopy_skewness'][category] = skewness
+            statistics['canopy_kurtosis'][category] = kurtosisness
+    else:
+        for category in gdf_proj.index:
+            mask = (output_raster == category)
+            average = raster[0][mask].mean() 
+            statistics['canopy_mean'][category] = average
+            stdev = raster[0][mask].std() 
+            statistics['canopy_stdev'][category] = stdev
+            skewness = skew(raster[0][mask])
+            statistics['canopy_skewness'][category] = skewness
+            kurtosisness = kurtosis(raster[0][mask])
+            statistics['canopy_kurtosis'][category] = kurtosisness
+
+    canopy_df = pd.DataFrame.from_dict({k:v for k,v in statistics.items()})
+    canopy_df['plot_id'] = canopy_df.index
+
+    return canopy_df
+
 
 def mask_raster_with_gdf(gdf, raster, meta):
     gdf_proj = gdf.copy()
@@ -336,9 +584,8 @@ def mask_raster_with_gdf(gdf, raster, meta):
 
     fields_rasterized = features.rasterize(geom, 
                                        out_shape=raster[0].shape, 
-                                       transform=meta['transform'])
-    
-    categories = np.unique(fields_rasterized)
+                                       transform=meta['transform'],
+                                       fill=-1)
 
     # Dictionary to store the average values for each category
     statistics = {
@@ -348,20 +595,29 @@ def mask_raster_with_gdf(gdf, raster, meta):
         'canopy_kurtosis':{}
     }
 
-    # Calculate the average for each category
-    for category in categories:
-        if category != 0:  # Assuming 0 is the background/no data
-            mask = (fields_rasterized == category)
+    if (raster[0].shape[0] > 50000) or (raster[0].shape[1] > 50000):
+        print('Large raster: using raster subset')
+        xarray = np.linspace(gdf.total_bounds[0], gdf.total_bounds[2],raster[0].shape[1]+1)
+        yarray = np.linspace(gdf.total_bounds[3], gdf.total_bounds[1],raster[0].shape[0]+1)
+        safety_value = 0.001
 
+        # Calculate the average for each category
+        for category in gdf_proj.index:
+            average, stdev, skewness, kurtosisness = subset_raster_from_coords(gdf, xarray, yarray, safety_value, fields_rasterized, raster, category)
+
+            statistics['canopy_mean'][category] = average
+            statistics['canopy_stdev'][category] = stdev
+            statistics['canopy_skewness'][category] = skewness
+            statistics['canopy_kurtosis'][category] = kurtosisness
+    else:
+        for category in gdf_proj.index:
+            mask = (fields_rasterized == category)
             average = raster[0][mask].mean() 
             statistics['canopy_mean'][category] = average
-
             stdev = raster[0][mask].std() 
             statistics['canopy_stdev'][category] = stdev
-
             skewness = skew(raster[0][mask])
             statistics['canopy_skewness'][category] = skewness
-
             kurtosisness = kurtosis(raster[0][mask])
             statistics['canopy_kurtosis'][category] = kurtosisness
 

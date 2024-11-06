@@ -52,8 +52,11 @@ def get_overture_buildings(building_data):
     Returns:
         gpd.GeoDataFrame: A geopandas GeoDataFrame containing OSM building footprints for specified spatial extent.
     """    
-
-    return gpd.read_parquet(building_data)
+    building_gdf = gpd.read_parquet(building_data)
+    if 'geometry_polygon' in building_gdf.columns:
+        building_gdf['geometry'] = building_gdf['geometry_polygon']
+        building_gdf = building_gdf.drop(columns = 'geometry_polygon')
+    return building_gdf
 
 
 def remove_overlapping_polygons(building):

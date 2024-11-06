@@ -262,18 +262,23 @@ def get_plot_to_plot_edges(urban_plots, add_reverse=True):
     Returns:
         np.array: A (2, N) array where the first row corresponds to urban plots and the second row corresponds to adjacent urban plots that are connected by the same street. N is the number of edges between all urban plots in the network. 
     """    
-    urban_plots['plot_id'] = urban_plots.index
-    urban_plots['nn_plot_ids'] = None
+    urban_plots_edges = urban_plots.explode('edge_ids')
 
-    for index, plot in urban_plots.iterrows():   
-        # get 'not disjoint' countries
-        neighbors = urban_plots[~urban_plots.geometry.disjoint(plot.geometry)].plot_id.tolist()
+    neighbors_df = urban_plots_edges.merge(
+                    urban_plots_edges, 
+                    on='edge_ids', 
+                    suffixes=('', '_right')
+                    )
+    
+    neighbors_df = neighbors_df[neighbors_df['plot_id'] != neighbors_df['plot_id_right']]
+    neighbors_df = neighbors_df[['plot_id', 'plot_id_right']].drop_duplicates()
 
-        # remove own name of the country from the list
-        neighbors = [name for name in neighbors if plot.plot_id != name ]
-        
-        # add names of neighbors as NEIGHBORS value
-        urban_plots.at[index, "nn_plot_ids"] = neighbors
+    # Step 4: Aggregate neighboring plot_ids
+    neighbors_dict = neighbors_df.groupby('plot_id')['plot_id_right'].apply(list)
+    neighbors_df = pd.DataFrame(data=neighbors_dict)
+    neighbors_df.columns = ['nn_plot_ids']
+
+    urban_plots = urban_plots.merge(neighbors_df, on='plot_id')
 
     # Create adjacency matrix for connected plots.
     start_list = []
@@ -298,7 +303,6 @@ def get_plot_to_plot_edges(urban_plots, add_reverse=True):
 
     return plot_to_plot
 
-
 def get_building_to_street_edges(streets, building_nodes, add_reverse=True):
     """Helper function to generate network edges between buildings and their adjacent (nearest; subject to distance threshold of 50 metres) streets.
 
@@ -316,8 +320,8 @@ def get_building_to_street_edges(streets, building_nodes, add_reverse=True):
     building_nodes_copy = building_nodes_copy.set_geometry('centroid')
     building_nodes_copy['b_index'] = building_nodes_copy.index
 
-    proj_edge = project_gdf(streets)
-
+    proj_edge = streets.to_crs(building_nodes_copy.crs)
+    
     # Find nearest building to street
     edge_intersection = gpd.sjoin_nearest(building_nodes_copy, proj_edge, how='inner', max_distance=50, distance_col = 'building_edges')
     edge_to_building = edge_intersection.groupby(['edge_id'])[['b_index']].aggregate(lambda x: list(x))
@@ -424,6 +428,10 @@ def most_frequent(List):
     occurence_count = Counter(List)
     return occurence_count.most_common(1)[0][0]
 
+def save_to_npz(filepath, gdf_dict, array_dict):
+    gdf_dict.update(array_dict)
+    np.savez_compressed(filepath, **gdf_dict)
+    
 def save_to_h5(filepath, gdf_dict, array_dict):
 
     # Save to HDF5 file
@@ -445,12 +453,13 @@ def load_from_h5(filepath):
     with h5py.File(filepath, 'r') as f:
 
         for k in f.keys():
-            if 'edges' not in k:
-                df = pd.read_csv(io.StringIO(f[k][()].decode()), sep=",")
-                gdf = gpd.GeoDataFrame(data=df, crs = 'EPSG:4326', geometry=df['geometry'].apply(wkt.loads))
-                objects[k] = gdf
-            else:
+            if 'to' in k:
                 connections[k] = f[k][:]
+            elif 'rev' in k:
+                new_k = k.replace('rev', 'rev_to')
+                connections[new_k] = f[k][:]
+            else:
+                objects[k] = f[k][:]
 
     return objects, connections
         
@@ -483,10 +492,10 @@ def one_hot_encode_categorical(df, target_col = '', prefix = ''):
 
 
 def remove_non_numeric_columns_objects(objects):
-    
+    objects_new = objects.copy()
     numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']
 
-    for key, object in objects.items():
+    for key, object in objects_new.items():
         only_numerics = object.select_dtypes(include=numerics)
 
         if key == 'intersections':
@@ -498,9 +507,9 @@ def remove_non_numeric_columns_objects(objects):
         elif key == 'streets':
             only_numerics = only_numerics.drop(columns = ['edge_id'], axis=1)
             
-        objects[key] = only_numerics
+        objects_new[key] = only_numerics
 
-    return objects
+    return objects_new
 
 
 def standardise_and_scale(objects):
@@ -533,3 +542,196 @@ def add_super_node(objects, connections, gdf, target = 'plot', name = 'boundary'
     connections[f'{target}_to_{name}'] = edge_connections.astype(int)
 
     return objects, connections
+
+# Visualisation
+import random
+import pydeck as pdk
+from pydeck.types import String
+
+DEFAULT_COLORS = {
+    "street": [150, 150, 150],
+    "plot": [100, 100, 100],
+    "building": [50, 50, 50],
+    "intersection": [25,50,25],
+    "network_edges": {
+        "__attribute_name__": "type",
+        "street": [155, 155, 155],
+        "project_line": [0, 0, 150],
+        "__other__": [0, 0, 0]
+    },
+    "network_nodes": {
+        "__attribute_name__": "type",
+        "street_node": [0, 255, 255],
+        "project_node": [0, 0, 255],
+        "destination": [239,89,128],
+        "origin": [86,5,255],
+        "__other__": [0, 0, 0]
+    }
+}
+
+
+def color_gdf(gdf, color_by_attribute=None, color_method=None, color=None):
+    """Sets geometry color
+
+    :param gdf: GeoDataFrame to be colored.
+    :param color_by_attribute: string, attribute name, or column name to visualize geometry by
+    :param color_method: string, "single_color" to color all geometry by the same color.
+    "categorical" to use distinct color to distinct value, "gradient": to use a gradient of colors for a numeric, scalar attribute.
+    :param color: if color method is single color, expects one color. if categorical, expects nothing and would give automatic assignment, or a dict {"val': [0,0,0]}. if color_method is gradient, expects nothing for a default color map, or a color map name
+
+    """
+    if color_method is None:
+        if color_by_attribute is not None:
+            color_method = "categorical"
+        else:
+            color_method = "single_color"
+
+    if color_by_attribute is None and color is None:
+        # if "color_by_attribute" is not given, and its not a default layer, assuming color_method == "single_color"
+        # if no color is given, assign random color, else, color=color
+        color = [random.random() * 255, random.random() * 255, random.random() * 255]
+        color_method = "single_color"
+    elif color is None:
+        # color by attribute ia given, but no color is given..
+        if color_method == "single_color":
+            # if color by attribute is given, and color method is single color, this is redundant but just in case:
+            color = [random.random() * 255, random.random() * 255, random.random() * 255]
+        if color_method == "categorical":
+            color = {"__other__": [255, 255, 255]}
+            for distinct_value in gdf[color_by_attribute].unique():
+                color[distinct_value] = [random.random() * 255, random.random() * 255, random.random() * 255]
+
+    # create color column
+    if color_method == "single_color":
+        color_column = [color] * len(gdf)
+    elif color_method == "categorical":
+        # color = {"__other__": [255, 255, 255]}
+        color_column = []
+        for value in gdf[color_by_attribute]:
+            if value in color.keys():
+                color_column.append(color[value])
+            else:
+                color_column.append(color["__other__"])
+    elif color_method == "gradient":
+        cbc = gdf[color_by_attribute]  # color by column
+        nc = 255 * (cbc - cbc.min()) / (cbc.max() - cbc.min())  # normalized column
+        color_column = [[255 - v, 0 + v, 0] if not np.isnan(v) else [255, 255, 255] for v in
+                        list(nc)]  # convert normalized values to color spectrom.
+        # TODO: insert color map options here..
+    elif color_method == 'quantile':
+        scaled_percentile_rank = 255 * gdf[color_by_attribute].rank(pct=True)
+        color_column = [[255.0 - v, 0.0 + v, 0] if not np.isnan(v) else [255, 255, 255] for v in
+                        scaled_percentile_rank]  # convert normalized values to color spectrom.
+
+    gdf["color"] = color_column
+    return gdf
+
+
+def create_deckGL_map(gdf_list=[], centerX=46.6725, centerY=24.7425, basemap=False, zoom=17, filename=None):
+
+    pdk_layers = []
+    for layer_number, gdf_dict in enumerate(gdf_list):
+        local_gdf = gdf_dict.copy(deep=True).reset_index()
+        local_gdf["geometry"] = local_gdf["geometry"].to_crs("EPSG:4326")
+        # print(f"{(time.time()-start)*1000:6.2f}ms\t {layer_number = }, gdf copied")
+
+        pdk_layer = pdk.Layer(
+            'GeoJsonLayer',
+            local_gdf.reset_index(),
+            opacity=1,
+            stroked=True,
+            filled=True,
+            wireframe=True,
+            get_line_width='__width__',
+            get_radius='__radius__',
+            get_line_color='color',
+            get_fill_color="color",
+            pickable=True,
+        )
+        pdk_layers.append(pdk_layer)
+        # print(f"{(time.time()-start)*1000:6.2f}ms\t {layer_number = }, pdk.Layer created.")
+
+
+        if "text" in gdf_dict:
+            # if numerical, round within four decimals, else, do nothing and treat as string
+            try:
+                local_gdf["text"] = round(local_gdf[gdf_dict["text"]], 2).astype('string')
+            except TypeError:
+                local_gdf["text"] = local_gdf[gdf_dict["text"]].astype('string')
+
+            # formatting a centroid point to be [lat, long]
+            local_gdf["coordinates"] = [[p.coords[0][0], p.coords[0][1]] for p in local_gdf["coordinates"]]
+
+            layer = pdk.Layer(
+                "TextLayer",
+                local_gdf.reset_index(),
+                pickable=True,
+                get_position="coordinates",
+                get_text="text",
+                get_size=16,
+                get_color='color',
+                get_angle=0,
+                background=True,
+                get_background_color=[0, 0, 0, 125],
+                # Note that string constants in pydeck are explicitly passed as strings
+                # This distinguishes them from columns in a data set
+                get_text_anchor=String("middle"),
+                get_alignment_baseline=String("center"),
+            )
+            pdk_layers.append(layer)
+            # print(f"{(time.time()-start)*1000:6.2f}ms\t {layer_number = }, text layer created and added.")
+
+
+    initial_view_state = pdk.ViewState(
+        latitude=centerY,
+        longitude=centerX,
+        zoom=zoom,
+        max_zoom=20,
+        pitch=0,
+        bearing=0
+    )
+
+    if basemap:
+        r = pdk.Deck(
+            layers=pdk_layers,
+            initial_view_state=initial_view_state,
+        )
+    else:
+        r = pdk.Deck(
+            layers=pdk_layers,
+            initial_view_state=initial_view_state,
+            map_provider=None,
+            parameters={
+                "clearColor": [0.00, 0.00, 0.00, 1]
+            },
+        )
+
+    if filename is not None:
+        r.to_html(
+            filename,
+            css_background_color="cornflowerblue"
+        )
+    # print(f"{(time.time()-start)*1000:6.2f}ms\t {layer_number = }, map rendered.")
+    return r
+
+def color_layer(self, layer_name, color_by_attribute=None, color_method="single_color", color=None):
+    '''
+    This function is used internally to apply default color settings for given layers
+    '''
+    if layer_name in self.DEFAULT_COLORS.keys() and color_by_attribute is None and color is None:
+        # set default colors first. all default layers call without specifying "color_by_attribute"
+        # default layer creation always calls self.color_layer(layer_name) without any other parameters
+        color = self.DEFAULT_COLORS[layer_name].copy()
+        color_method = "single_color"
+        if type(color) is dict:
+            # the default color is categorical..
+            color_by_attribute = color["__attribute_name__"]
+            color_method = "categorical"
+    self.layers[layer_name]["gdf"] = self.color_gdf(
+        self.layers[layer_name]["gdf"],
+        color_by_attribute=color_by_attribute,
+        color_method=color_method,
+        color=color
+    )
+    return
+

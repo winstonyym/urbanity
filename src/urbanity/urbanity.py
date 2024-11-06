@@ -26,7 +26,7 @@ import networkx as nx
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Polygon, box, LineString
-from shapely.ops import unary_union, polygonize, split
+from shapely.ops import unary_union, polygonize, split, snap
 import ipyleaflet
 from ipyleaflet import basemaps, basemap_to_tiles, Icon, Marker, LayersControl, LayerGroup, DrawControl, FullScreenControl, ScaleControl, LocalTileLayer, GeoData
 import pyrosm
@@ -37,11 +37,12 @@ from scipy.stats import entropy
 from .utils import get_country_centroids, finetune_poi, get_available_precomputed_network_data, most_frequent, get_plot_to_plot_edges, \
                     get_building_to_street_edges, get_edge_nodes, get_building_to_building_edges, get_intersection_to_street_edges, \
                     get_buildings_in_plot_edges, get_edges_along_plot, add_super_node, remove_non_numeric_columns_objects, standardise_and_scale, \
-                    fill_na_in_objects, one_hot_encode_categorical, save_to_h5
+                    fill_na_in_objects, one_hot_encode_categorical, save_to_h5, save_to_npz
 
 from .geom import *
 from .building import *
-from .population import get_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, get_population_tif_from_coords, load_npz_as_raster, mask_raster_with_gdf
+from .population import get_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, load_npz_as_raster, mask_raster_with_gdf, \
+                        is_bounding_box_within, find_valid_tif_files, mask_raster_with_gdf_large_raster
 from .topology import compute_centrality, merge_nx_property, merge_nx_attr
 
 
@@ -2869,7 +2870,7 @@ class Map(ipyleaflet.Map):
             lcz_filepath: str,
             canopy_filepath: str,
             pop_filepath: str, 
-            bandwidth: int = 100,
+            bandwidth: int = 0,
             minimum_area: int = 30,
             knn: list = [3],
             knn_threshold: int = 100,
@@ -2878,7 +2879,8 @@ class Map(ipyleaflet.Map):
             network_type: str = 'driving',
             add_self_as_super_node: bool = False,
             save_as_h5: bool = False,
-            h5_filepath: str = ''
+            save_as_npz: bool = False,
+            save_filepath: str = ''
             ) -> [gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Function to generate heterogeneous urban graph. Returns node types as individual geodataframes: 1) urban plots; 2) buildings; 3) streets; 4) intersections.
         Bandwidth (m) can be specified to buffer network, obtaining neighbouring nodes within buffered area of network.
@@ -2900,7 +2902,8 @@ class Map(ipyleaflet.Map):
             network_type (str): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
             add_self_as_super_node (bool): If True, inserts spatial boundary (as specified in Map object `polygon_bounds` property) as a super node that is connected to other polygon elements (e.g. usually urban plot). Useful for tasks that involve prediction of attributes corresponding to spatial boundary. 
             save_as_h5 (bool): If True, applies standard numerical preprocessing which includes scaling numerical columns and one-hot encoding categorical columns. Saves output as binarized h5py format to optimize space.
-            h5_filepath (str): Specifies location to save h5py graph object. 
+            save_as_npz (bool): If True, applies standard numerical preprocessing which includes scaling numerical columns and one-hot encoding categorical columns. Saves output as numpy compressed format to optimize space.
+            save_filepath (str): Specifies location to save h5py or npz graph object. 
         Returns:
             gpd.GeoDataFrame: A geopandas GeoDataFrame of map boundary as super node that is connected to each plot within it.
             gpd.GeoDataFrame: A geopandas GeoDataFrame of urban plots (polygons) and contextual spatial features that are located within each plot.
@@ -2995,24 +2998,24 @@ class Map(ipyleaflet.Map):
 
             # Add network attributes
             proj_nodes = project_gdf(nodes)
-            proj_edges = project_gdf(edges)
+            proj_edges = edges.to_crs(proj_nodes.crs)
 
-            # Buffer around nodes
-            nodes_buffer = proj_nodes.copy()
-            nodes_buffer['geometry'] = nodes_buffer.geometry.buffer(bandwidth)
+            # # Buffer around nodes
+            # nodes_buffer = proj_nodes.copy()
+            # nodes_buffer['geometry'] = nodes_buffer.geometry.buffer(100)
 
-            res_intersection = proj_nodes.overlay(nodes_buffer, how='intersection')
-            res_intersection['num_nodes'] = 1
-            # Use intersection_id_2 because of node-node_buffer intersection
-            nodes["intersection_num_nodes"] = res_intersection.groupby(['intersection_id_2'])['num_nodes'].sum().values
+            # res_intersection = proj_nodes.overlay(nodes_buffer, how='intersection')
+            # res_intersection['num_nodes'] = 1
+            # # Use intersection_id_2 because of node-node_buffer intersection
+            # nodes["intersection_num_nodes"] = res_intersection.groupby(['intersection_id_2'])['num_nodes'].sum().values
             
-            # Add Street Length
+            # # Add Street Length
             
-            res_intersection = proj_edges.overlay(nodes_buffer, how='intersection')
-            res_intersection['street_len'] = res_intersection.geometry.length
-            
-            nodes["intersection_total_street_length"] = res_intersection.groupby(['intersection_id'])['street_len'].sum().values
-            nodes["intersection_total_street_length"] = nodes["intersection_total_street_length"].round(3)
+            # res_intersection = proj_edges.overlay(nodes_buffer, how='intersection')
+            # res_intersection['street_len'] = res_intersection.geometry.length
+
+            # nodes["intersection_total_street_length"] = res_intersection.groupby(['intersection_id'])['street_len'].sum().values
+            # nodes["intersection_total_street_length"] = nodes["intersection_total_street_length"].round(3)
             
             # Add Degree Centrality, Clustering (Weighted and Unweighted)
             nodes = merge_nx_property(nodes, G_buff_trunc_loop.out_degree, 'intersection_degree')
@@ -3085,11 +3088,11 @@ class Map(ipyleaflet.Map):
 
         else:
             buildings = get_overture_buildings(building_filepath)
-
+            
             # Process geometry and attributes for Overture buildings; locally projects
             buildings = preprocess_osm_building_geometry(buildings, minimum_area=30, prefix='overture')
-        
-            # Obtain unique ids for buildings
+
+            # Obtain uniqu e ids for buildings
             buildings = assign_numerical_id_suffix(buildings, prefix='overture')
             buildings = buildings.reset_index(drop=True)
 
@@ -3099,6 +3102,7 @@ class Map(ipyleaflet.Map):
             building_centroids = buildings.geometry.centroid
             buildings = buildings[['bid', 'bid_area', 'bid_perimeter', 'geometry']]
 
+            
             # Compute building attributes
             buildings = compute_circularcompactness(buildings, element='bid')
             buildings = compute_convexity(buildings, element='bid')
@@ -3135,8 +3139,11 @@ class Map(ipyleaflet.Map):
 
             elif return_neighbours == 'distance':
                 def remove_self(neighbours, bid):
-                    neighbours.remove(bid)
-                    return neighbours
+                    try:
+                        neighbours.remove(bid)
+                        return neighbours
+                    except ValueError:
+                        return neighbours
                 
                 for i in distance_threshold:
                     buffer_gdf = gpd.GeoDataFrame(data={'buffer_id':buildings.index}, crs=buildings.crs, geometry = building_centroids)
@@ -3171,11 +3178,12 @@ class Map(ipyleaflet.Map):
             buffered_tp = self.polygon_bounds.copy()
             buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
             proj_boundary = project_gdf(buffered_tp)
+            proj_boundary = proj_boundary.to_crs(proj_edges.crs)
 
             # Create expanded buffer (buffer bandwidth)
             proj_boundary_expanded = proj_boundary.copy()
             proj_boundary_expanded['geometry'] = proj_boundary.buffer(10)
-
+   
             # Get inner and out edges
             outside_edges_proj = proj_edges.overlay(proj_boundary_expanded, how='difference')
             inside_edges_proj = proj_edges[~proj_edges['edge_id'].isin(list(outside_edges_proj['edge_id']))]
@@ -3183,6 +3191,13 @@ class Map(ipyleaflet.Map):
             # Group linestring with edge_ids
             linestrings_with_attributes = [(linestring, edge_id) for linestring, edge_id in zip(inside_edges_proj.geometry, inside_edges_proj['edge_id'])]
 
+            clipped_lines = gpd.clip(inside_edges_proj, proj_boundary)
+        
+            tolerance = 1
+            inside_edges_proj['geometry'] = clipped_lines['geometry'].apply(
+                lambda line: snap(line, proj_boundary.geometry, tolerance)
+            )[0]
+            
             # Polygonize linestrings
             merged_linestrings = unary_union(pd.concat([inside_edges_proj.geometry, proj_boundary.boundary.geometry]))
             polygons = list(polygonize(merged_linestrings))
@@ -3190,6 +3205,7 @@ class Map(ipyleaflet.Map):
             # Create urban plots
             urban_plots = gpd.GeoDataFrame(data={'plot_id': range(len(polygons))}, crs=proj_edges.crs, geometry = polygons)
 
+            print('Computed urban plots')
             # Associate urban plots with edge ids
             polygon_features = []
 
@@ -3201,6 +3217,7 @@ class Map(ipyleaflet.Map):
                         attributes.append(attr)
                 
                 polygon_features.append(attributes)
+            
 
             # Create geodataframe associating each polygon with their own edge ids, filter by minimum size
             urban_plots['edge_ids'] = polygon_features
@@ -3212,17 +3229,20 @@ class Map(ipyleaflet.Map):
             urban_plots['plot_id'] = urban_plots.index
 
             urban_plots = urban_plots.to_crs('EPSG:4326')
-
              # Add canopy height
+            print('Loading canopy height map...')
             canopy_vars = ['canopy_mean', 'canopy_stdev', 'canopy_skewness', 'canopy_kurtosis']
 
             mosaic, meta = load_npz_as_raster(canopy_filepath)
 
-            canopy_df = mask_raster_with_gdf(urban_plots, mosaic, meta)
-
+            if (mosaic[0].shape[0] >100000) or (mosaic[0].shape[1] >100000):
+                canopy_df = mask_raster_with_gdf_large_raster(urban_plots, mosaic, meta)
+            else:
+                canopy_df = mask_raster_with_gdf(urban_plots, mosaic, meta)
             urban_plots = urban_plots.merge(canopy_df, on='plot_id', how='left')
             urban_plots[canopy_vars] = urban_plots[canopy_vars].fillna(0)
 
+            print('Adding building morphology to plots...')
             # Add building id to plot
             building_urban_plots_intersection = buildings.overlay(urban_plots)
             urban_plots['bid'] = building_urban_plots_intersection.groupby('plot_id')[['bid']].aggregate(lambda x: list(x))
@@ -3242,6 +3262,7 @@ class Map(ipyleaflet.Map):
             urban_plots['plot_bid_total_area'] = building_urban_plots_intersection.groupby('plot_id')['bid_area'].sum()
             urban_plots['plot_bid_built_coverage'] = urban_plots['plot_bid_total_area'] / urban_plots['plot_area'] 
             
+            print('Adding plot morphology to plots...')
             # Compute building attributes
             urban_plots = compute_circularcompactness(urban_plots, element='plot')
             urban_plots = compute_convexity(urban_plots, element='plot')
@@ -3259,6 +3280,7 @@ class Map(ipyleaflet.Map):
             urban_plots = urban_plots.fillna(0)
 
             # Add pois to urban plot
+            print('Adding poi categories to plots...')
             poi_columns = ['Cultural Institutions', 'Groceries', 'Parks', 'Religious Organizations', 'Restaurants', 'Schools', 'Services', 'Drugstores', 'Healthcare']
 
             pois = gpd.read_parquet(poi_filepath)
@@ -3278,6 +3300,7 @@ class Map(ipyleaflet.Map):
             urban_plots[poi_columns] = urban_plots[poi_columns].fillna(0)
 
             # Add LCZ
+            print('Adding LCZ mapping to plots...')
             lcz_array = raster2gdf(lcz_filepath, zoom=True, boundary=self.polygon_bounds, same_geometry=False)
             res_intersection = lcz_array.overlay(urban_plots)
             lcz_series = res_intersection.groupby('plot_id')['value'].value_counts()
@@ -3305,21 +3328,44 @@ class Map(ipyleaflet.Map):
             urban_plots[lcz_column_names] = urban_plots[lcz_column_names].fillna(0)
 
             # Add population
-            lat, long = self.polygon_bounds.geometry.centroid[0].y, self.polygon_bounds.geometry.centroid[0].x
+            print('Adding population counts to plots...')
+            long_min, lat_min, long_max, lat_max = self.polygon_bounds.geometry.total_bounds
 
             pop_subgroups = ['population', 'children', 'youth', 'elderly', 'men', 'women']
 
-            for i, subgroup in enumerate(pop_subgroups):
-                subgroup_tif_fp = get_population_tif_from_coords(pop_filepath, subgroup, lat, long)
+            # Example usage
+            bounding_box = self.polygon_bounds.geometry.total_bounds  # Example bounding box (xmin, ymin, xmax, ymax)
 
-                if i == 0:
-                    subgroup_pop_gdf = raster2gdf(subgroup_tif_fp, zoom=True, boundary=self.polygon_bounds, same_geometry=False)
-                    subgroup_pop_gdf = subgroup_pop_gdf.fillna(0)
-                    subgroup_pop_gdf = subgroup_pop_gdf.rename(columns={'value':subgroup})
+            tif_files = glob.glob(os.path.join(pop_filepath, '*.tif'))
+
+            valid_tif_files = find_valid_tif_files(tif_files, bounding_box)
+            for subgroup in pop_subgroups:
+                current_paths = []
+
+                for path in valid_tif_files:
+                    if subgroup == 'men':
+                        if all(x in path for x in subgroup) and ('women' not in path):
+                            current_paths.append(path)
+                    else:
+                        if subgroup in path:
+                            current_paths.append(path)
+
+                if subgroup == 'population':
+                    subgroup_pop_gdf = gpd.GeoDataFrame()
+                    for subgroup_tif_fp in current_paths:
+                        temp_subgroup_pop_gdf = raster2gdf(subgroup_tif_fp, zoom=True, boundary=self.polygon_bounds, same_geometry=False)
+                        temp_subgroup_pop_gdf = temp_subgroup_pop_gdf.fillna(0)
+                        temp_subgroup_pop_gdf = temp_subgroup_pop_gdf.rename(columns={'value':subgroup})
+                        subgroup_pop_gdf = pd.concat([subgroup_pop_gdf, temp_subgroup_pop_gdf], ignore_index=True, axis=0)
+
                 else: 
-                    new_pop_gdf = raster2gdf(subgroup_tif_fp, zoom=True, boundary=self.polygon_bounds, same_geometry=True)
-                    new_pop_gdf = new_pop_gdf.fillna(0)
-                    new_pop_gdf = new_pop_gdf.rename(columns={'value':subgroup})   
+                    new_pop_gdf = pd.DataFrame()
+                    for subgroup_tif_fp in current_paths:
+                        temp_new_pop_gdf = raster2gdf(subgroup_tif_fp, zoom=True, boundary=self.polygon_bounds, same_geometry=True)
+                        temp_new_pop_gdf = temp_new_pop_gdf.fillna(0)
+                        temp_new_pop_gdf = temp_new_pop_gdf.rename(columns={'value':subgroup})   
+                        new_pop_gdf = pd.concat([new_pop_gdf, temp_new_pop_gdf], ignore_index=True, axis=0)
+
                     subgroup_pop_gdf = pd.concat([subgroup_pop_gdf, new_pop_gdf], axis=1)
 
             res_intersection = gpd.sjoin(subgroup_pop_gdf, urban_plots, how='inner')
@@ -3348,12 +3394,13 @@ class Map(ipyleaflet.Map):
         if add_self_as_super_node:
             objects, connections = add_super_node(objects, connections, self.polygon_bounds, target='plot', name='boundary')
 
-        connections['plot_to_plot'], connections['plot_rev_plot']= get_plot_to_plot_edges(urban_plots)
+        _, connections['plot_rev_plot']= get_plot_to_plot_edges(urban_plots)
         connections['building_to_street'], connections['street_to_building']  = get_building_to_street_edges(edges, buildings)
-        connections['building_to_building'], connections['building_rev_building'] = get_building_to_building_edges(buildings, adj_column=adj_column)
+        _, connections['building_rev_building'] = get_building_to_building_edges(buildings, adj_column=adj_column)
         connections['intersection_to_street'], connections['street_to_intersection'] = get_intersection_to_street_edges(nodes, edges)
         connections['building_to_plot'], connections['plot_to_building'] = get_buildings_in_plot_edges(urban_plots, adj_column='bid')
         connections['street_to_plot'], connections['plot_to_street'] = get_edges_along_plot(urban_plots, adj_column='edge_ids')
+
 
         print("Total elapsed time --- %s seconds ---" % round(time.time() - start))
 
@@ -3363,8 +3410,17 @@ class Map(ipyleaflet.Map):
             process_objects = fill_na_in_objects(objects)
             process_objects = remove_non_numeric_columns_objects(process_objects)
             process_objects = standardise_and_scale(process_objects)
-            save_to_h5(h5_filepath, process_objects, connections)
+            save_to_h5(save_filepath, process_objects, connections)
             return objects, connections
+        
+        if save_as_npz:
+
+            process_objects = fill_na_in_objects(objects)
+            process_objects = remove_non_numeric_columns_objects(process_objects)
+            process_objects = standardise_and_scale(process_objects)
+            save_to_npz(save_filepath, process_objects, connections)
+            return objects, connections
+
         
         else:
             return objects, connections
