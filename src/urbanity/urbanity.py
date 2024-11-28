@@ -175,8 +175,9 @@ class Map(ipyleaflet.Map):
             polygon_style (dict, optional): Default visualisation parameters to display geographical layer. Defaults to {'style': {'color': 'black', 'fillColor': '#3366cc', 'opacity':0.05, 'weight':1.9, 'dashArray':'2', 'fillOpacity':0.6}, 'hover_style': {'fillColor': 'red' , 'fillOpacity': 0.2}}.
         """        
 
-        if filepath:
-            # GeoJSON string file
+        if filepath[-7:] == 'parquet':
+            gdf = gpd.read_parquet(filepath)
+        else:
             gdf = gpd.read_file(filepath)
         
         # Check for and drop timestamp column
@@ -3239,6 +3240,7 @@ class Map(ipyleaflet.Map):
                 canopy_df = mask_raster_with_gdf_large_raster(urban_plots, mosaic, meta)
             else:
                 canopy_df = mask_raster_with_gdf(urban_plots, mosaic, meta)
+            canopy_df = canopy_df[['canopy_mean', 'canopy_stdev', 'canopy_skewness', 'canopy_kurtosis', 'plot_id']]
             urban_plots = urban_plots.merge(canopy_df, on='plot_id', how='left')
             urban_plots[canopy_vars] = urban_plots[canopy_vars].fillna(0)
 
@@ -3295,6 +3297,7 @@ class Map(ipyleaflet.Map):
                     pois_df[i] = 0
                 elif i in set(pois_df.columns):
                     pois_df[i] = pois_df[i].replace(np.nan, 0)
+            pois_df = pois_df[poi_columns]
 
             urban_plots = urban_plots.merge(pois_df, on='plot_id', how='left')
             urban_plots[poi_columns] = urban_plots[poi_columns].fillna(0)
@@ -3322,6 +3325,8 @@ class Map(ipyleaflet.Map):
                     lcz_df[i] = 0
                 elif i in set(lcz_df.columns):
                     lcz_df[i] = lcz_df[i].replace(np.nan, 0)
+            
+            lcz_df = lcz_df[lcz_column_names]
             
             # Join pixel mean to network edges
             urban_plots = urban_plots.merge(lcz_df, on='plot_id', how='left')
@@ -3417,9 +3422,9 @@ class Map(ipyleaflet.Map):
 
             process_objects = fill_na_in_objects(objects)
             process_objects = remove_non_numeric_columns_objects(process_objects)
-            process_objects = standardise_and_scale(process_objects)
+            # process_objects = standardise_and_scale(process_objects)
             save_to_npz(save_filepath, process_objects, connections)
-            return objects, connections
+            return process_objects, connections
 
         
         else:

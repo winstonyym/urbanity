@@ -303,6 +303,22 @@ def get_plot_to_plot_edges(urban_plots, add_reverse=True):
 
     return plot_to_plot
 
+def select_columns(objects):
+    """Helper function to drop identifier ids
+
+    Args:
+        objects (dict): Set of object and their geodataframes
+
+    Returns:
+        _type_: Return set of object and their geodataframes with id columns removed
+    """    
+    
+    objects['intersection'] = objects['intersection'][:,4:]
+    objects['building'] = objects['building'][:,1:]
+    objects['street'] = objects['street'][:,[3,24,28,38,41,141]]
+    objects['plot'] = objects['plot'][:,1:]
+    return objects
+
 def get_building_to_street_edges(streets, building_nodes, add_reverse=True):
     """Helper function to generate network edges between buildings and their adjacent (nearest; subject to distance threshold of 50 metres) streets.
 
@@ -428,10 +444,6 @@ def most_frequent(List):
     occurence_count = Counter(List)
     return occurence_count.most_common(1)[0][0]
 
-def save_to_npz(filepath, gdf_dict, array_dict):
-    gdf_dict.update(array_dict)
-    np.savez_compressed(filepath, **gdf_dict)
-    
 def save_to_h5(filepath, gdf_dict, array_dict):
 
     # Save to HDF5 file
@@ -446,6 +458,19 @@ def save_to_h5(filepath, gdf_dict, array_dict):
 
         for array_key, array_data in array_dict.items():
             f.create_dataset(array_key, data=array_data)
+
+def load_npz(filepath):
+    out = np.load(filepath)
+    objects = {}
+    connections = {}
+
+    for k,v in out.items():
+        if '_' in k:
+            connections[k] = v
+        else:
+            objects[k] = v
+    return objects, connections
+
 
 def load_from_h5(filepath):
     connections = {}
@@ -462,6 +487,10 @@ def load_from_h5(filepath):
                 objects[k] = f[k][:]
 
     return objects, connections
+
+def save_to_npz(save_filepath, objects, connections):
+    objects.update(connections)
+    np.savez_compressed(save_filepath, **objects)
         
         
 def fill_na_in_objects(objects):
