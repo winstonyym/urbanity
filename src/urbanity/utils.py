@@ -763,4 +763,3 @@ def color_layer(self, layer_name, color_by_attribute=None, color_method="single_
         color=color
     )
     return
-

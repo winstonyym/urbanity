@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import networkit
 
-def compute_centrality(G, G_nodes, function, colname, *args):
+def compute_centrality(G, G_nodes, function, colname, T_nodes, *args, temporal=False):
     """Employs networkit fast centrality computation to obtain various network centrality measures.
 
     Args:
@@ -16,20 +16,28 @@ def compute_centrality(G, G_nodes, function, colname, *args):
     Returns:
         gpd.GeoDataFrame: Node attribute dataframe with network centrality measures included. 
     """    
-
-    # Convert to networkx to networkit graph object 
+    G_nodes_mod = G_nodes.copy()
+    
     nk_G = networkit.nxadapter.nx2nk(G, weightAttr=None)
     nk_centrality = function(nk_G, *args)
-
-    # Compute centrality 
     nk_centrality.run()
+
     value = [v for k,v in nk_centrality.ranking()[:]]
-    G_nodes[colname] = value
-    G_nodes[colname] = G_nodes[colname].round(3)
-    return G_nodes
+    if temporal:
+        T_nodes_mod= T_nodes.copy()
+        T_nodes_mod[colname] = value
+        T_nodes_mod = T_nodes_mod[['osmid', colname]]
+        G_nodes_mod = pd.merge(G_nodes_mod, T_nodes_mod, on='osmid', how='left')
+        G_nodes_mod[colname] = G_nodes_mod[colname].fillna(0)
+        G_nodes_mod[colname] = G_nodes_mod[colname].round(3)
+    else:
+        
+        G_nodes_mod[colname] = value
+        G_nodes_mod[colname] = G_nodes_mod[colname].round(3)
+    
+    return G_nodes_mod
 
-
-def merge_nx_attr(G, G_nodes, nxfunction, colname, **kwargs):
+def merge_nx_attr(G, G_nodes, nxfunction, colname, T_nodes, temporal=False ,**kwargs):
     """Add graph attributes from networkx graph into node attribute dataframe. 
 
     Args:
@@ -42,6 +50,9 @@ def merge_nx_attr(G, G_nodes, nxfunction, colname, **kwargs):
         gpd.GeoDataFrame: Node attribute dataframe with network clustering measures included. 
     """  
     # If Graph is nx.MultiDiGraph  
+    G_nodes_mod = G_nodes.copy()
+    
+
     try:
         attr_dict = nxfunction(G, **kwargs)
     
@@ -50,12 +61,20 @@ def merge_nx_attr(G, G_nodes, nxfunction, colname, **kwargs):
         G2 = nx.DiGraph(G)
         attr_dict = nxfunction(G2, **kwargs)
     
-    G_nodes[colname] = list(attr_dict.values())
-    G_nodes[colname] = G_nodes[colname].round(3)
-    return G_nodes
+    if temporal:
+        T_nodes_mod = T_nodes.copy()
+        T_nodes_mod[colname] = list(attr_dict.values())
+        T_nodes_mod = T_nodes_mod[['osmid', colname]]
+        G_nodes_mod = pd.merge(G_nodes_mod, T_nodes_mod, on='osmid', how='left')
+        G_nodes_mod[colname] = G_nodes_mod[colname].fillna(0)
+        G_nodes_mod[colname] = G_nodes_mod[colname].round(3)
+    else:
+        G_nodes_mod[colname] = list(attr_dict.values())
+        G_nodes_mod[colname] = G_nodes_mod[colname].round(3)
+    return G_nodes_mod
 
 
-def merge_nx_property(G_nodes, nxproperty, colname, *args):
+def merge_nx_property(G_nodes, nxproperty, colname, T_nodes, temporal=False, *args):
     """Add graph property from networkx graph into node attribute dataframe.
 
     Args:
@@ -66,8 +85,15 @@ def merge_nx_property(G_nodes, nxproperty, colname, *args):
     Returns:
         gpd.GeoDataFrame: Node attribute dataframe with network property included.
     """    
-    attr_dict = dict(nxproperty)
-    G_nodes[colname] = list(attr_dict.values())
-    G_nodes[colname] = G_nodes[colname].round(3)
+    G_nodes_mod = G_nodes.copy()
 
-    return G_nodes
+    attr_dict = dict(nxproperty)
+    if temporal:
+        T_nodes_mod = T_nodes.copy()
+        T_nodes_mod[colname] = list(attr_dict.values())
+        T_nodes_mod = T_nodes_mod[['osmid', colname]]
+        G_nodes_mod = pd.merge(G_nodes_mod, T_nodes_mod, on='osmid', how='left')
+        G_nodes_mod[colname] = G_nodes_mod[colname].fillna(0)
+    else:
+        G_nodes_mod[colname] = list(attr_dict.values())
+    return G_nodes_mod

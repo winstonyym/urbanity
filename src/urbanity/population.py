@@ -9,6 +9,8 @@ from io import BytesIO
 
 # import external packages
 import rasterio
+from rasterio.merge import merge
+from rasterio.transform import array_bounds
 from rasterio import features
 from rasterio.windows import Window
 from rasterio.mask import mask
@@ -140,6 +142,7 @@ def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary
 
     Args:
         raster_path (str): Filepath to a raster dataset (.tiff)
+        meta_file (dict): Contains meta information of .tiff file.
         chosen_band (int, optional): Selection of raster channel. Defaults to 1.
         get_grid (bool, optional): If True, returns gridded GeoDataFrame, otherwise returns center points. Defaults to True.
         zoom (bool, optional): If True, reads only a windowed portion of large .tiff file. Requires `boundary` to be provided. Defaults to False. 
@@ -148,21 +151,32 @@ def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary
         gpd.GeoDataFrame: A GeoDataFrame of points coordinates that correspond to original raster tile (centroid) positions.
     """    
     
-    try:
-        raster_dataset = rasterio.open(raster_path)
-    except:
-        with rasterio.open(raster_path) as src:
-            print(src.profile)
+    # Check if raster file is already open
+    if isinstance(raster_path, rasterio.io.DatasetReader):
+        raster_dataset = raster_path
+    elif isinstance(raster_path, tuple):
+        value_array, bounds, raster_dataset = raster_path
+    else: 
+        try:
+            raster_dataset = rasterio.open(raster_path)
+        except:
+            with rasterio.open(raster_path) as src:
+                print(src.profile)
 
     if zoom and boundary is not None:
-        xarray = np.linspace(raster_dataset.bounds[0], raster_dataset.bounds[2],raster_dataset.width+1)
-        yarray = np.linspace(raster_dataset.bounds[3], raster_dataset.bounds[1],raster_dataset.height+1)
-        half_x_grid_size = (raster_dataset.bounds[2] - raster_dataset.bounds[0])/(raster_dataset.width)/2
-        half_y_grid_size = (raster_dataset.bounds[3] - raster_dataset.bounds[1])/(raster_dataset.height)/2
+        if isinstance(raster_path, tuple):
+            xarray = np.linspace(bounds[0], bounds[2],value_array.shape[2]+1)
+            yarray = np.linspace(bounds[3],bounds[1],value_array.shape[1]+1)
+            half_x_grid_size = (bounds[2] - bounds[0])/(value_array.shape[2])/2
+            half_y_grid_size = (bounds[3] - bounds[1])/(value_array.shape[1])/2
+        else:
+            xarray = np.linspace(raster_dataset.bounds[0], raster_dataset.bounds[2],raster_dataset.width+1)
+            yarray = np.linspace(raster_dataset.bounds[3], raster_dataset.bounds[1],raster_dataset.height+1)
+            half_x_grid_size = (raster_dataset.bounds[2] - raster_dataset.bounds[0])/(raster_dataset.width)/2
+            half_y_grid_size = (raster_dataset.bounds[3] - raster_dataset.bounds[1])/(raster_dataset.height)/2
 
         # Get boundary coordinates
         xmin, ymin, xmax, ymax = boundary.total_bounds
-
         # Get raster offsets, width, and height
         list_x_range = [i for i in list(xarray) if i >= xmin-half_x_grid_size if i <=xmax+half_x_grid_size]
         list_y_range = [i for i in list(yarray) if i >= ymin-half_y_grid_size if i <=ymax+half_y_grid_size]
@@ -173,8 +187,14 @@ def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary
         
         if same_geometry: 
             # Read windowed raster view
-            with rasterio.open(raster_path) as src:
-                value_array = src.read(1, window=Window(x_off, y_off, x_width-1, y_width-1))
+            if isinstance(raster_path, rasterio.io.DatasetReader):
+                value_array = raster_path.read(1, window=Window(x_off, y_off, x_width-1, y_width-1))
+            elif isinstance(raster_path, tuple):
+                value_array = raster_path[0][0][y_off:(y_off + y_width-1), x_off:(x_off + x_width-1)]
+            else:
+                with rasterio.open(raster_path) as src:
+                    value_array = src.read(1, window=Window(x_off, y_off, x_width-1, y_width-1))
+
             return pd.DataFrame({'value':np.ravel(value_array, order='C')})
 
         geom_list = []
@@ -186,13 +206,21 @@ def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary
                                         (list_x_range[x_i+1], list_y_range[y_i])]))
 
         # Read windowed raster view
-        with rasterio.open(raster_path) as src:
-            value_array = src.read(1, window=Window(x_off, y_off, x_width-1, y_width-1))
+        if isinstance(raster_path, rasterio.io.DatasetReader):
+            value_array = raster_path.read(1, window=Window(x_off, y_off, x_width-1, y_width-1))
+        elif isinstance(raster_path, tuple):
+            value_array = raster_path[0][0][y_off:(y_off + y_width-1), x_off:(x_off + x_width-1)]
+        else: 
+            with rasterio.open(raster_path) as src:
+                value_array = src.read(1, window=Window(x_off, y_off, x_width-1, y_width-1))
         
         mydf = pd.DataFrame({'value':np.ravel(value_array, order='C')})
+        if isinstance(raster_path, tuple):
+            mygdf = gpd.GeoDataFrame(data = mydf, crs = raster_path[2], geometry = geom_list)
+        else:
+            mygdf = gpd.GeoDataFrame(data = mydf, crs = raster_dataset.crs, geometry = geom_list)
 
-        return gpd.GeoDataFrame(data = mydf, crs = raster_dataset.crs, geometry = geom_list)
-
+        return mygdf
     # Raster value array
     value_array = raster_dataset.read(chosen_band)
     
@@ -625,3 +653,47 @@ def mask_raster_with_gdf(gdf, raster, meta):
     canopy_df['plot_id'] = canopy_df.index
 
     return canopy_df
+
+
+def download_tiff_from_path(lcz_path):
+    """
+    Download and read a TIFF file from a given URL into a rasterio object.
+    Handles cases where the TIFF is inside a ZIP archive.
+
+    Parameters:
+    lcz_path (str): URL of the raster file or ZIP archive.
+
+    Returns:
+    rasterio.io.DatasetReader: The raster dataset loaded into memory.
+    """
+    # Download the raster data
+    response = requests.get(lcz_path, stream=True)
+    if not response.ok:
+        raise Exception(f"Failed to download file from {lcz_path}. Status code: {response.status_code}")
+
+    # Read the content into a BytesIO buffer
+    file_buffer = BytesIO(response.content)
+    
+    # Check if the file is a ZIP archive
+    if zipfile.is_zipfile(file_buffer):
+        with zipfile.ZipFile(file_buffer) as z:
+            # Find the first TIFF file in the ZIP archive
+            tiff_files = [f for f in z.namelist() if f.lower().endswith('.tif')]
+            if not tiff_files:
+                raise Exception("No TIFF files found in the ZIP archive.")
+            
+            # Open the first TIFF file
+            with z.open(tiff_files[0]) as tiff_file:
+                tiff_buffer = BytesIO(tiff_file.read())
+                raster = rasterio.open(tiff_buffer)
+                return raster
+    else:
+        # Assume the file is directly a TIFF file
+        raster = rasterio.open(file_buffer)
+        return raster
+    
+def merge_raster_list(raster_list):
+    "Utility function to merge list of rasters"
+    mosaic, out_trans = merge(raster_list)
+    bounds = array_bounds(mosaic.shape[1], mosaic.shape[2], out_trans)
+    return mosaic, bounds, raster_list[0].crs
