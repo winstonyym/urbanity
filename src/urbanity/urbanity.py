@@ -503,7 +503,6 @@ class Map(ipyleaflet.Map):
                 overlapping_grid = ghs_global_grid.overlay(buffered_tp)
                 buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth+500)
                 # Loop through each year and obtain tif file
-
                 origin_gdf = gpd.GeoDataFrame()
 
                 for k, year in enumerate(temporal_years):
@@ -514,6 +513,7 @@ class Map(ipyleaflet.Map):
                             target_tif = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"
                             raster_dataset = download_tiff_from_path(target_tif)
                             raster_gdf = raster2gdf(raster_dataset, zoom=True, boundary = buffered_tp, same_geometry=False)
+
                         elif len(overlapping_grid) > 1: 
                             raster_list = []
                             for i, row in overlapping_grid.iterrows():
@@ -523,8 +523,10 @@ class Map(ipyleaflet.Map):
                             # Merge rasters
                             mosaic = merge_raster_list(raster_list)
                             raster_gdf = raster2gdf(mosaic, zoom=True, boundary = buffered_tp, same_geometry=False)
+                        
                         raster_gdf.columns = [str(year), 'geometry']
                         origin_gdf = gpd.GeoDataFrame(pd.concat([origin_gdf, raster_gdf], axis=1))
+                        
                     else:
                         # If only one tile
                         if len(overlapping_grid) == 1:
@@ -535,13 +537,13 @@ class Map(ipyleaflet.Map):
                         elif len(overlapping_grid) > 1: 
                             raster_list = []
                             for i, row in overlapping_grid.iterrows():
-                                target_tif = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row['row']}_{row['col']}.zip"
+                                target_tif = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row['row']}_C{row['col']}.zip"
                                 raster_dataset = download_tiff_from_path(target_tif)
                                 raster_list.append(raster_dataset)
                             # Merge rasters
                             mosaic = merge_raster_list(raster_list)
                             raster_gdf = raster2gdf(mosaic, zoom=True, boundary = buffered_tp, same_geometry=True)
-                        
+
                         raster_gdf.columns = [str(year)]
                         origin_gdf = gpd.GeoDataFrame(pd.concat([origin_gdf, raster_gdf], axis=1)) 
 
