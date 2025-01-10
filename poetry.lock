@@ -1158,7 +1158,7 @@ python-versions = ">=3.5"
 
 [[package]]
 name = "networkit"
-version = "10.1"
+version = "10.0"
 description = "NetworKit is a toolbox for high-performance network analysis"
 category = "main"
 optional = false
@@ -2172,7 +2172,7 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.9"
-content-hash = "f4c3233742cf971b7efee2cc1c47eb1bb7b8b8c28c6faee88b8b9ed714a33400"
+content-hash = "068264d2ac65ade75edb69da4f97cfbdc31012170f4a19ba01e5c86d5c3fddb2"
 
 [metadata.files]
 affine = []

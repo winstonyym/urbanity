@@ -3114,17 +3114,18 @@ class Map(ipyleaflet.Map):
             # nodes["intersection_total_street_length"] = nodes["intersection_total_street_length"].round(3)
             
             # Add Degree Centrality, Clustering (Weighted and Unweighted)
-            nodes = merge_nx_property(nodes, G_buff_trunc_loop.out_degree, 'intersection_degree')
-            nodes = merge_nx_attr(G_buff_trunc_loop, nodes, nx.clustering, 'intersection_clustering')
-            nodes = merge_nx_attr(G_buff_trunc_loop, nodes, nx.clustering, 'inter_section_weighted_clustering', weight='length')
+
+            nodes = merge_nx_property(nodes, G_buff_trunc_loop.out_degree, 'intersection_degree', None)
+            nodes = merge_nx_attr(G_buff_trunc_loop, nodes, nx.clustering, 'intersection_clustering', None)
+            nodes = merge_nx_attr(G_buff_trunc_loop, nodes, nx.clustering, 'inter_section_weighted_clustering', None, weight='length')
 
             #  Add Centrality Measures
-            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.Closeness, 'Closeness Centrality', False, False)
-            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.Betweenness, 'Betweenness Centrality', True)
-            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.EigenvectorCentrality, 'Eigenvector Centrality')
-            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.KatzCentrality, 'Katz Centrality')
-            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.PageRank, 'PageRank', 0.85, 1e-8, networkit.centrality.SinkHandling.NoSinkHandling, True)
-            
+            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.Closeness, 'Closeness Centrality', None, False, False)
+            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.Betweenness, 'Betweenness Centrality', None, True)
+            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.EigenvectorCentrality, 'Eigenvector Centrality', None)
+            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.KatzCentrality, 'Katz Centrality', None)
+            nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.PageRank, 'PageRank', None, 0.85, 1e-8, networkit.centrality.SinkHandling.NoSinkHandling, True)
+    
             print(f'Network constructed. Time taken: {round(time.time() - start)}.')
 
             # Add SVI to edges
@@ -3330,6 +3331,8 @@ class Map(ipyleaflet.Map):
             canopy_vars = ['canopy_mean', 'canopy_stdev', 'canopy_skewness', 'canopy_kurtosis']
 
             mosaic, meta = load_npz_as_raster(canopy_filepath)
+            self.canopy = mosaic
+            self.canopy_meta = meta
 
             if (mosaic[0].shape[0] >100000) or (mosaic[0].shape[1] >100000):
                 canopy_df = mask_raster_with_gdf_large_raster(urban_plots, mosaic, meta)
@@ -3379,8 +3382,8 @@ class Map(ipyleaflet.Map):
             # Add pois to urban plot
             print('Adding poi categories to plots...')
             poi_columns = ['Cultural Institutions', 'Groceries', 'Parks', 'Religious Organizations', 'Restaurants', 'Schools', 'Services', 'Drugstores', 'Healthcare']
-
             pois = gpd.read_parquet(poi_filepath)
+            self.pois = pois
 
             poi_intersection = pois.overlay(urban_plots)
             poi_series = poi_intersection.groupby(['plot_id'])['Category'].value_counts()
@@ -3400,6 +3403,7 @@ class Map(ipyleaflet.Map):
             # Add LCZ
             print('Adding LCZ mapping to plots...')
             lcz_array = raster2gdf(lcz_filepath, zoom=True, boundary=self.polygon_bounds, same_geometry=False)
+            self.lcz = lcz_array
             res_intersection = lcz_array.overlay(urban_plots)
             lcz_series = res_intersection.groupby('plot_id')['value'].value_counts()
 
@@ -3468,6 +3472,7 @@ class Map(ipyleaflet.Map):
 
                     subgroup_pop_gdf = pd.concat([subgroup_pop_gdf, new_pop_gdf], axis=1)
 
+            self.pop = subgroup_pop_gdf
             res_intersection = gpd.sjoin(subgroup_pop_gdf, urban_plots, how='inner')
 
             subgroup_pop_series = res_intersection.groupby('plot_id')[['population','men','women','elderly','youth','children']].aggregate('sum')

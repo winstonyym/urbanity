@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "urbanity"
-version = "0.5.1"
+version = "0.5.2"
 description = ""
 authors = ["winstonyym <winstonyym@u.nus.edu>"]
 license = "MIT"
@@ -22,7 +22,7 @@ geopandas = "^1.0.1"
 numpy = "1.26.4"
 overturemaps = "^0.8.0"
 h5py = "^3.11.0"
-networkit = "10.1"
+networkit = "10.0"
 pydeck = "^0.9.1"
 
 [tool.poetry.dev-dependencies]

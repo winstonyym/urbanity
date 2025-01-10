@@ -12,5 +12,5 @@ dependencies:
   - contextily
   - pyarrow
   - pip:
-    - urbanity==0.4.2
+    - urbanity==0.5.1
 prefix: /Users/winston/miniconda3/envs/urbanity
