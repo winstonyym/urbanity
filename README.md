@@ -18,6 +18,13 @@
 
 **Urbanity** is a network-based Python package developed at the [NUS Urban Analytics Lab](https://ual.sg/data-code/) to automate the construction of feature rich (contextual and semantic) urban networks at any geographical scale. Through an accessible and simple to use interface, users can request heterogeneous urban information such as street view imagery, building morphology, population (including sub-group), and points of interest for target areas of interest.
 
+### Use cases
+One popular use case for **Urbanity** is for graph machine learning on urban networks. These tasks are consistent with GraphML literature and include node level, edge level, and graph level predictive tasks. 
+
+- [Road network classification](https://urbanity.readthedocs.io/en/latest/notebooks/transductive_graph_ml.html)
+- [Building operating energy prediction](https://github.com/winstonyym/open-building-energy-prediction)
+
+Questions concerning use cases can be directed to the author: winstonyym@u.nus.edu
 </br>
 
 <p align="center">
