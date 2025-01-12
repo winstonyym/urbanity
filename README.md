@@ -47,13 +47,12 @@ _How do I install Urbanity?_
 Urbanity is built on several geospatial packages (e.g., GeoPandas, ipyleaflet, rasterio, etc.,) that are best compiled through conda-forge. For seamless installation, we provide an environment.yml file for users to create their own conda environment. Please follow the steps below to ensure proper installation:
 
 1. Navigate to a location of choice (e.g., Desktop or project folder).
-2. Download environment.yml file and place it at the location of choice (Step 1).
+2. Download environment.yml and setup.sh file and place it at the location of choice (Step 1).
 3. Open up a terminal/command prompt and input the following command:
 
 ```
-$ conda config --set channel_priority strict
-$ conda env create -f environment.yml
-$ conda activate urbanity
+$ chmod +x ./setup.sh
+$ ./setup.sh
 ```
 
 4. Installation completed and you should be able to use urbanity without issues.
