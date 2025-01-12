@@ -20,6 +20,8 @@ conda install geopandas -y
 python -m pip install urbanity==0.5.2
 python -m pip install pyarrow
 python -m pip install rasterio==1.4.0
+python -m pip install jupyter-leaflet
+python -m pip install jupyter
 
 # 5. Uninstall pip version of networkit (if it exists)
 python -m pip uninstall -y networkit || true
