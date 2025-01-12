@@ -4,15 +4,4 @@ channels:
   - defaults
 dependencies:
   - python==3.9
-  - pip
-  - geopandas
-  - ipykernel
-  - ipyleaflet
-  - ipywidgets==8.0.2
-  - rasterio
-  - contextily
-  - pyarrow
-  - pip:
-    - rasterio==1.4.0
-    - urbanity==0.5.2
 prefix: /Users/winston/miniconda3/envs/urbanity

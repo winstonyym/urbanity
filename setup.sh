@@ -13,8 +13,16 @@ conda env create -n urbanity -f environment.yml
 # 4. Activate
 conda activate urbanity
 
+conda config --env --add channels conda-forge
+conda config --env --set channel_priority strict
+
+conda install geopandas -y
+python -m pip install urbanity==0.5.2
+python -m pip install pyarrow
+python -m pip install rasterio==1.4.0
+
 # 5. Uninstall pip version of networkit (if it exists)
-pip uninstall -y networkit || true
+python -m pip uninstall -y networkit || true
 
 # 6. Install conda-forge's version of networkit
 conda install -c conda-forge -y networkit
