@@ -41,7 +41,7 @@ from .utils import get_country_centroids, finetune_poi, get_available_precompute
 
 from .geom import *
 from .building import *
-from .population import get_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, load_npz_as_raster, mask_raster_with_gdf, \
+from .population import get_meta_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, load_npz_as_raster, mask_raster_with_gdf, \
                         is_bounding_box_within, find_valid_tif_files, mask_raster_with_gdf_large_raster, download_tiff_from_path, merge_raster_list
 from .topology import compute_centrality, merge_nx_property, merge_nx_attr
 
@@ -353,7 +353,7 @@ class Map(ipyleaflet.Map):
         # Use non-tiled .csv for small countries
         if self.country not in tiled_country:
             print('Using non-tiled population data.')
-            pop_gdf, target_col = get_population_data(self.country, 
+            pop_gdf, target_col = get_meta_population_data(self.country, 
                                                         bounding_poly=self.polygon_bounds,
                                                         all_only = True)
 
@@ -500,53 +500,91 @@ class Map(ipyleaflet.Map):
                 # Load global tile dataframe and fine overlapping grid
                 ghs_global_grid_path = pkg_resources.resource_filename('urbanity', 'ghs_data/global_ghs_grid.parquet')
                 ghs_global_grid = gpd.read_parquet(ghs_global_grid_path)
+
                 overlapping_grid = ghs_global_grid.overlay(buffered_tp)
                 buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth+500)
                 # Loop through each year and obtain tif file
-                origin_gdf = gpd.GeoDataFrame()
+                origin_gdf_built = gpd.GeoDataFrame()
+                origin_gdf_pop = gpd.GeoDataFrame()
 
                 for k, year in enumerate(temporal_years):
+                    # Only compute geometry once
                     if k == 0:
                         # If only one tile
                         if len(overlapping_grid) == 1:
                             row, col = overlapping_grid['row'].values.item(), overlapping_grid['col'].values.item()
-                            target_tif = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"
-                            raster_dataset = download_tiff_from_path(target_tif)
-                            raster_gdf = raster2gdf(raster_dataset, zoom=True, boundary = buffered_tp, same_geometry=False)
+                            target_tif_built = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"
+                            target_tif_pop = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"
+                            raster_dataset_built = download_tiff_from_path(target_tif_built)
+                            raster_dataset_pop = download_tiff_from_path(target_tif_pop)
+                            raster_gdf_built = raster2gdf(raster_dataset_built, zoom=True, boundary = buffered_tp, same_geometry=False)
+                            raster_gdf_pop = raster2gdf(raster_dataset_pop, zoom=True, boundary = buffered_tp, same_geometry=False)
 
                         elif len(overlapping_grid) > 1: 
-                            raster_list = []
+                            raster_list_built = []
+                            raster_list_pop = []
                             for i, row in overlapping_grid.iterrows():
-                                target_tif = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row['row']}_C{row['col']}.zip"
-                                raster_dataset = download_tiff_from_path(target_tif)
-                                raster_list.append(raster_dataset)
+                                target_tif_built = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row['row']}_C{row['col']}.zip"
+                                target_tif_pop = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"                           
+                                raster_dataset_built = download_tiff_from_path(target_tif_built)
+                                raster_dataset_pop = download_tiff_from_path(target_tif_pop)
+                                raster_list_built.append(raster_dataset_built)
+                                raster_list_pop.append(raster_dataset_pop)
+
                             # Merge rasters
-                            mosaic = merge_raster_list(raster_list)
-                            raster_gdf = raster2gdf(mosaic, zoom=True, boundary = buffered_tp, same_geometry=False)
+                            mosaic_built = merge_raster_list(raster_list_built)
+                            mosaic_pop = merge_raster_list(raster_list_pop)
+                            raster_gdf_built = raster2gdf(mosaic_built, zoom=True, boundary = buffered_tp, same_geometry=False)
+                            raster_gdf_pop = raster2gdf(mosaic_pop, zoom=True, boundary = buffered_tp, same_geometry=False)
                         
-                        raster_gdf.columns = [str(year), 'geometry']
-                        origin_gdf = gpd.GeoDataFrame(pd.concat([origin_gdf, raster_gdf], axis=1))
+                        raster_gdf_built.columns = [str(year), 'geometry']
+                        origin_gdf_built = gpd.GeoDataFrame(pd.concat([origin_gdf_built, raster_gdf_built], axis=1))
+                        
+                        raster_gdf_pop.columns = [str(year), 'geometry']
+                        origin_gdf_pop = gpd.GeoDataFrame(pd.concat([origin_gdf_pop, raster_gdf_pop], axis=1))
                         
                     else:
                         # If only one tile
                         if len(overlapping_grid) == 1:
                             row, col = overlapping_grid['row'].values.item(), overlapping_grid['col'].values.item()
-                            target_tif = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"
-                            raster_dataset = download_tiff_from_path(target_tif)
-                            raster_gdf = raster2gdf(raster_dataset, zoom=True, boundary = buffered_tp, same_geometry=True)
+                            target_tif_built = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"
+                            target_tif_pop = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"
+
+                            raster_dataset_built = download_tiff_from_path(target_tif_built)
+                            raster_dataset_pop = download_tiff_from_path(target_tif_pop)
+
+                            raster_gdf_built = raster2gdf(raster_dataset_built, zoom=True, boundary = buffered_tp, same_geometry=True)
+                            raster_gdf_pop = raster2gdf(raster_dataset_pop, zoom=True, boundary = buffered_tp, same_geometry=True)
+
                         elif len(overlapping_grid) > 1: 
-                            raster_list = []
+                            raster_list_built = []
+                            raster_list_pop = []
+
                             for i, row in overlapping_grid.iterrows():
-                                target_tif = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row['row']}_C{row['col']}.zip"
-                                raster_dataset = download_tiff_from_path(target_tif)
-                                raster_list.append(raster_dataset)
+                                target_tif_built = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row['row']}_C{row['col']}.zip"
+                                target_tif_pop = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"
+
+                                raster_dataset_built = download_tiff_from_path(target_tif_built)
+                                raster_dataset_pop = download_tiff_from_path(target_tif_pop)
+
+                                raster_list_built.append(raster_dataset_built)
+                                raster_list_pop.append(raster_dataset_pop)
+
                             # Merge rasters
-                            mosaic = merge_raster_list(raster_list)
-                            raster_gdf = raster2gdf(mosaic, zoom=True, boundary = buffered_tp, same_geometry=True)
+                            mosaic_built = merge_raster_list(raster_list_built)
+                            mosaic_pop = merge_raster_list(raster_list_pop)
 
-                        raster_gdf.columns = [str(year)]
-                        origin_gdf = gpd.GeoDataFrame(pd.concat([origin_gdf, raster_gdf], axis=1)) 
+                            raster_gdf_built = raster2gdf(mosaic_built, zoom=True, boundary = buffered_tp, same_geometry=True)
+                            raster_gdf_pop = raster2gdf(mosaic_pop, zoom=True, boundary = buffered_tp, same_geometry=True)
 
+                        raster_gdf_built.columns = [str(year)]
+                        origin_gdf_built  = gpd.GeoDataFrame(pd.concat([origin_gdf_built, raster_gdf_built], axis=1)) 
+                        
+                        raster_gdf_pop.columns = [str(year)]
+                        origin_gdf_pop  = gpd.GeoDataFrame(pd.concat([origin_gdf_pop, raster_gdf_pop], axis=1)) 
+
+                temporal_rename = {str(i):f'{i}_pop' for i in temporal_years}
+                origin_gdf_pop = origin_gdf_pop.rename(columns=temporal_rename)
 
             # Obtain nodes and edges within buffered polygon
             osm = pyrosm.OSM(fp, bounding_box=buffered_bbox)
@@ -605,10 +643,10 @@ class Map(ipyleaflet.Map):
             temporal_network_list = []
             temporal_nodes_list = []
             if temporal_network:
-                nodes = nodes.overlay(origin_gdf)
+                nodes = nodes.overlay(origin_gdf_built)
                 temporal_years = [str(i) for i in temporal_years]
                 nodes[temporal_years] = nodes[temporal_years].applymap(lambda x: 1 if x >= built_up_threshold else 0)
-            
+
                 for year in temporal_years:
                     G_buff_trunc_loop_year = G_buff_trunc_loop.copy()
                     nodes_to_remove = list(nodes[nodes[year] == 0]['osmid'].values)
@@ -619,7 +657,10 @@ class Map(ipyleaflet.Map):
 
                     nodes_year = nodes[nodes['osmid'].isin(set(G_buff_trunc_loop_year.nodes))]
                     temporal_nodes_list.append(nodes_year)
-                    
+                
+                # Add population counts
+                nodes = nodes.overlay(origin_gdf_pop)
+  
             self.network.append(G_buff_trunc_loop)
             self.network.append(nodes)
             self.network.append(edges)
@@ -921,7 +962,7 @@ class Map(ipyleaflet.Map):
                     # Use csv for small countries
                     if self.country not in tiled_country:
                         print('Using non-tiled population data.')
-                        pop_list, target_cols = get_population_data(self.country, 
+                        pop_list, target_cols = get_meta_population_data(self.country, 
                                                                     bounding_poly=self.polygon_bounds)
                         
                     # If big country, use csv and custom tiled population data: (e.g. USA: https://figshare.com/articles/dataset/USA_TILE_POPULATION/21502296)
@@ -1565,7 +1606,7 @@ class Map(ipyleaflet.Map):
                 # Use csv for small countries
                 if self.country not in tiled_country:
                     print('Using non-tiled population data.')
-                    pop_list, target_cols = get_population_data(self.country, 
+                    pop_list, target_cols = get_meta_population_data(self.country, 
                                                                 bounding_poly=buffered_tp)
                 
                 elif self.country in tiled_country:
@@ -2215,7 +2256,7 @@ class Map(ipyleaflet.Map):
                 # Use csv for small countries
                 if self.country not in tiled_country:
                     print('Using non-tiled population data.')
-                    pop_list, target_cols = get_population_data(self.country, 
+                    pop_list, target_cols = get_meta_population_data(self.country, 
                                                                 bounding_poly=buffered_tp)
                 elif self.country in tiled_country:
                     print('Using tiled population data.')
@@ -2878,7 +2919,7 @@ class Map(ipyleaflet.Map):
             # Use csv for small countries
             if self.country not in tiled_country:
                 print('Using non-tiled population data.')
-                pop_list, target_cols = get_population_data(self.country, 
+                pop_list, target_cols = get_meta_population_data(self.country, 
                                                             bounding_poly=buffered_tp)
             elif self.country in tiled_country:
                 print('Using tiled population data.')
@@ -3530,249 +3571,3 @@ class Map(ipyleaflet.Map):
         else:
             return objects, connections
             
-
-    def get_urban_graph2(
-            self, 
-            network_filepath: str, 
-            svi_filepath: str,
-            building_filepath: str,
-            poi_filepath: str, 
-            lcz_filepath: str,
-            canopy_filepath: str,
-            pop_filepath: str, 
-            bandwidth: int = 0,
-            minimum_area: int = 30,
-            knn: list = [3],
-            knn_threshold: int = 100,
-            return_neighbours: str = 'distance',
-            distance_threshold: list = [100],
-            network_type: str = 'driving',
-            add_self_as_super_node: bool = False,
-            save_as_h5: bool = False,
-            save_as_npz: bool = False,
-            save_filepath: str = ''
-            ) -> [gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Function to generate heterogeneous urban graph. Returns node types as individual geodataframes: 1) urban plots; 2) buildings; 3) streets; 4) intersections.
-        Bandwidth (m) can be specified to buffer network, obtaining neighbouring nodes within buffered area of network.
-
-        Args:
-            network_filepath (str): Specify path to osm.pbf file.
-            svi_filepath (str): Specify path to street view imagery file.
-            building_filepath (str): Specify path to overture building footprint file.
-            poi_filepath (str): Specify path to overture poi file.
-            canopy_filepath (str): Specify path to canopy heights raster file.
-            lcz_filepath (str): Specify path to lcz raster file.
-            pop_filepath (str): Specify path to population folder. 
-            bandwidth (int): Distance to extract information beyond network. Defaults to 100.
-            minimum_area (int): Specifies minimum plot area to filter small urban plots (e.g. small polygons formed by road intersection).
-            knn (list): Specifies the number of neighbours for each building to form building to building edges.
-            knn_threshold (int): Specifies the distance (metres) for a building to be considered a neighbour. To simplify computation, distance is measured between building to building centroid.
-            return_neighbours (str): Choose whether to use knn option or distance (knn threshold) to define building neighbours. 
-            distance_threshold (list): Specifies the set of buffer distances to search for building neighbours.
-            network_type (str): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
-            add_self_as_super_node (bool): If True, inserts spatial boundary (as specified in Map object `polygon_bounds` property) as a super node that is connected to other polygon elements (e.g. usually urban plot). Useful for tasks that involve prediction of attributes corresponding to spatial boundary. 
-            save_as_h5 (bool): If True, applies standard numerical preprocessing which includes scaling numerical columns and one-hot encoding categorical columns. Saves output as binarized h5py format to optimize space.
-            save_as_npz (bool): If True, applies standard numerical preprocessing which includes scaling numerical columns and one-hot encoding categorical columns. Saves output as numpy compressed format to optimize space.
-            save_filepath (str): Specifies location to save h5py or npz graph object. 
-        Returns:
-            gpd.GeoDataFrame: A geopandas GeoDataFrame of map boundary as super node that is connected to each plot within it.
-            gpd.GeoDataFrame: A geopandas GeoDataFrame of urban plots (polygons) and contextual spatial features that are located within each plot.
-            gpd.GeoDataFrame: A geopandas GeoDataFrame of building footprints (polygons) and morphological features of each building.
-            gpd.GeoDataFrame: A geopandas GeoDataFrame of street segments (linestrings) and street view indices.
-            gpd.GeoDataFrame: A geopandas GeoDataFrame of street intersections (points) with metric adn topological node properties.
-            np.ndarray: Plot to plot adjacency matrix (P X 2) where P refers to the number of links between each plot. A link is established if plots are adjacent to each other.
-            np.ndarray: Plot to building adjacency matrix (P_b X 2) where P_b refers to the number of links between buildings and urban plots. A link is established if a building is within a plot.
-            np.ndarray: Plot to street adjacency matrix (P_s X 2) where P_s refers to the number of links between streets and urban plots. A link is established if a street forms the edge of a plot.
-            np.ndarray: Building to building adjacency matrix (B X 2) where B refers to the number of links between buildings. A link can be established in two different ways: 1) distance threshold between building centroids or 2) k-nearest neighbours.
-            np.ndarray: Building to street adjacency matrix (B_s X 2) where B_s refers to the number of links between buildings and streets. A link is established between each building and its nearest adjacent street. 
-            np.ndarray: Street to intersection adjacency matrix (S_i X 2) where S_i refers to the number of links between streets and intersections. A link is established if one end of a street segment is connected to an intersection. 
-        """ 
-        
-        # If precomputed available, use precomputed
-        start = time.time()
-
-        if self.network:
-            print('Network data found, skipping re-computation')
-            G_buff_trunc_loop, nodes, edges = self.network[0], self.network[1], self.network[2]
-        
-        else:
-            # Project and buffer original polygon to examine nodes outside boundary
-            try:
-                original_bbox = self.polygon_bounds.geometry[0]
-                buffered_tp = self.polygon_bounds.copy()
-                buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
-                buffered_bbox = buffered_tp.geometry.values[0]
-            # catch when it hasn't even been defined 
-            except (AttributeError, NameError):
-                raise Exception('Please delimit a bounding box.')
-
-            # Obtain nodes and edges within buffered polygon
-            osm = pyrosm.OSM(network_filepath, bounding_box=buffered_bbox)
-            
-            nodes, edges = osm.get_network(network_type=network_type, nodes=True)
-            
-            # Build networkx graph for pre-processing
-            G_buff = osm.to_graph(nodes, edges, graph_type="networkx", force_bidirectional=True, retain_all=True)
-
-            # Add great circle length to network edges
-            G_buff = add_edge_lengths(G_buff)
-
-            # Simplify graph by removing nodes between endpoints and joining linestrings
-            G_buff_simple = simplify_graph(G_buff)
-
-            # Identify nodes inside and outside (buffered polygon) of original polygon
-            gs_nodes = graph_to_gdf(G_buff_simple, nodes=True)[["geometry"]]
-            to_keep = gs_nodes.within(original_bbox)
-            to_keep = gs_nodes[to_keep]
-            nodes_outside = gs_nodes[~gs_nodes.index.isin(to_keep.index)]
-            set_outside = nodes_outside.index
-
-            # Truncate network by edge if all neighbours fall outside original polygon
-            nodes_to_remove = set()
-            for node in set_outside:
-                neighbors = set(G_buff_simple.successors(node)) | set(G_buff_simple.predecessors(node))
-                if neighbors.issubset(nodes_outside):
-                    nodes_to_remove.add(node)
-            
-            G_buff_trunc = G_buff_simple.copy()
-            initial = G_buff_trunc.number_of_nodes()
-            G_buff_trunc.remove_nodes_from(nodes_to_remove)
-
-            # Remove unconnected subgraphs
-            max_wcc = max(nx.weakly_connected_components(G_buff_trunc), key=len)
-            G_buff_trunc = nx.subgraph(G_buff_trunc, max_wcc)
-
-            # Remove self loops
-            G_buff_trunc_loop = G_buff_trunc.copy()
-            G_buff_trunc_loop.remove_edges_from(nx.selfloop_edges(G_buff_trunc_loop))
-            
-            nodes, edges = graph_to_gdf(G_buff_trunc_loop, nodes=True, edges=True)
-
-            # Fill NA and drop incomplete columns
-            nodes = nodes.fillna('')
-            edges = edges.fillna('')
-            nodes = nodes.drop(columns=['osmid','tags','timestamp','version','changeset']).reset_index()
-            edges = edges.reset_index()[['u','v','length','geometry']]
-    
-            # Assign unique IDs
-            nodes['intersection_id'] = nodes.index
-            nodes = nodes[['intersection_id','osmid', 'x', 'y', 'geometry']]
-            
-            edges['edge_id'] = edges.index
-            edges = edges[['edge_id', 'u', 'v', 'length','geometry']]
-
-            self.network.append(G_buff_trunc_loop)
-            self.network.append(nodes)
-            self.network.append(edges)
-
-
-            # Add network attributes
-            proj_nodes = project_gdf(nodes)
-            proj_edges = edges.to_crs(proj_nodes.crs)
-
-        if self.urban_plots is not None:
-            print('Urban plots data found, skipping re-computation.')
-            urban_plots = self.urban_plots
-
-        else:
-            # Obtain urban plots
-            original_bbox = self.polygon_bounds.geometry[0]
-            buffered_tp = self.polygon_bounds.copy()
-            buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
-            proj_boundary = project_gdf(buffered_tp)
-            proj_boundary = proj_boundary.to_crs(proj_edges.crs)
-
-            # Create expanded buffer (buffer bandwidth)
-            proj_boundary_expanded = proj_boundary.copy()
-            proj_boundary_expanded['geometry'] = proj_boundary.buffer(10)
-   
-            # Get inner and out edges
-            outside_edges_proj = proj_edges.overlay(proj_boundary_expanded, how='difference')
-            inside_edges_proj = proj_edges[~proj_edges['edge_id'].isin(list(outside_edges_proj['edge_id']))]
-
-            # Group linestring with edge_ids
-            linestrings_with_attributes = [(linestring, edge_id) for linestring, edge_id in zip(inside_edges_proj.geometry, inside_edges_proj['edge_id'])]
-
-            clipped_lines = gpd.clip(inside_edges_proj, proj_boundary)
-        
-            tolerance = 1
-            inside_edges_proj['geometry'] = clipped_lines['geometry'].apply(
-                lambda line: snap(line, proj_boundary.geometry, tolerance)
-            )[0]
-            
-            # Polygonize linestrings
-            merged_linestrings = unary_union(pd.concat([inside_edges_proj.geometry, proj_boundary.boundary.geometry]))
-            polygons = list(polygonize(merged_linestrings))
-
-            # Create urban plots
-            urban_plots = gpd.GeoDataFrame(data={'plot_id': range(len(polygons))}, crs=proj_edges.crs, geometry = polygons)
-
-            # Associate urban plots with edge ids
-            polygon_features = []
-
-            for i, polygon in enumerate(polygons):
-                attributes = []
-                
-                for line, attr in linestrings_with_attributes:
-                    if polygon.covers(line):
-                        attributes.append(attr)
-                
-                polygon_features.append(attributes)
-
-            # Create geodataframe associating each polygon with their own edge ids, filter by minimum size
-            urban_plots['edge_ids'] = polygon_features
-            urban_plots['plot_area'] = urban_plots.geometry.area
-            urban_plots['plot_perimeter'] = urban_plots.geometry.length
-            urban_plots = urban_plots[urban_plots['plot_area'] > minimum_area]
-            urban_plots = urban_plots.loc[urban_plots.geometry.is_valid]
-            urban_plots = urban_plots.reset_index(drop=True)
-            urban_plots['plot_id'] = urban_plots.index
-
-            urban_plots = urban_plots.to_crs('EPSG:4326')
-            # Add pois to urban plot
-            poi_columns = ['Cultural Institutions', 'Groceries', 'Parks', 'Religious Organizations', 'Restaurants', 'Schools', 'Services', 'Drugstores', 'Healthcare']
-
-            pois = gpd.read_parquet(poi_filepath)
-
-            poi_intersection = pois.overlay(urban_plots)
-            poi_series = poi_intersection.groupby(['plot_id'])['Category'].value_counts()
-            pois_df = pd.DataFrame(index = poi_series.index, data = poi_series.values).reset_index()
-            pois_df = pd.pivot(pois_df, index='plot_id', columns='Category', values=0).fillna(0)
-
-            for i in poi_columns:
-                if i not in set(pois_df.columns):
-                    pois_df[i] = 0
-                elif i in set(pois_df.columns):
-                    pois_df[i] = pois_df[i].replace(np.nan, 0)
-
-            # Add LCZ
-            lcz_array = raster2gdf(lcz_filepath, zoom=True, boundary=self.polygon_bounds, same_geometry=False)
-            res_intersection = lcz_array.overlay(urban_plots)
-            lcz_series = res_intersection.groupby('plot_id')['value'].value_counts()
-
-            lcz_df = pd.DataFrame(index = lcz_series.index, data = lcz_series.values).reset_index()
-            # return lcz_df
-            lcz_df = pd.pivot(lcz_df, index='plot_id', columns='value', values=0).fillna(0)
-                    
-            # Sum across rows to get total for each row
-            row_totals = lcz_df.sum(axis=1)
-            lcz_df = lcz_df.div(row_totals, axis=0) * 100
-
-            # Rename columns
-            lcz_df.columns = ['lcz_' + str(col) for col in lcz_df.columns]
-
-            lcz_column_names = ['lcz_'+str(i) for i in range(0,18)]
-            for i in lcz_column_names:
-                if i not in set(lcz_df.columns):
-                    lcz_df[i] = 0
-                elif i in set(lcz_df.columns):
-                    lcz_df[i] = lcz_df[i].replace(np.nan, 0)
-            
-            correct_lcz = [f"lcz_{i}" for i in range(18)]
-            correct_poi = ['Cultural Institutions', 'Groceries', 'Parks', 'Religious Organizations', 'Restaurants', 'Schools', 'Services', 'Drugstores', 'Healthcare']
-            
-            mapping_lcz = np.array([list(lcz_df.columns).index(i) + 61 for i in correct_lcz])
-            mapping_poi = np.array([list(pois_df.columns).index(i) + 52 for i in correct_poi])
-
-            return mapping_lcz, mapping_poi
-        

@@ -17,7 +17,8 @@ conda config --env --add channels conda-forge
 conda config --env --set channel_priority strict
 
 conda install geopandas -y
-python -m pip install urbanity==0.5.2
+python -m pip install urbanity==0.5.3
+python -m pip install setuptools==68
 python -m pip install pyarrow
 python -m pip install rasterio==1.4.0
 python -m pip install jupyter-leaflet
