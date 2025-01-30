@@ -19,7 +19,7 @@ conda config --env --set channel_priority strict
 conda install mamba -c conda-forge -y
 
 mamba install geopandas -y
-python -m pip install urbanity==0.5.3
+python -m pip install urbanity==0.5.5
 # 5. Uninstall pip version of networkit (if it exists)
 python -m pip uninstall -y networkit || true
 
@@ -29,5 +29,7 @@ mamba install -c conda-forge -y ipyleaflet
 mamba install -c conda-forge -y jupyter 
 mamba install -c conda-forge -y pyarrow
 mamba install -c conda-forge -y networkit
+mamba install -c conda-forge -y h5py
+
 
 echo "All done! Environment set up successfully."
