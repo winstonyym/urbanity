@@ -525,7 +525,7 @@ class Map(ipyleaflet.Map):
                             raster_list_pop = []
                             for i, row in overlapping_grid.iterrows():
                                 target_tif_built = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row['row']}_C{row['col']}.zip"
-                                target_tif_pop = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"                           
+                                target_tif_pop = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row['row']}_C{row['col']}.zip"                           
                                 raster_dataset_built = download_tiff_from_path(target_tif_built)
                                 raster_dataset_pop = download_tiff_from_path(target_tif_pop)
                                 raster_list_built.append(raster_dataset_built)
@@ -562,7 +562,7 @@ class Map(ipyleaflet.Map):
 
                             for i, row in overlapping_grid.iterrows():
                                 target_tif_built = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_S_GLOBE_R2023A/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_BUILT_S_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row['row']}_C{row['col']}.zip"
-                                target_tif_pop = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"
+                                target_tif_pop = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row['row']}_C{row['col']}.zip"
 
                                 raster_dataset_built = download_tiff_from_path(target_tif_built)
                                 raster_dataset_pop = download_tiff_from_path(target_tif_pop)
