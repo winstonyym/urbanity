@@ -3001,12 +3001,12 @@ class Map(ipyleaflet.Map):
     def get_urban_graph(
             self, 
             network_filepath: str, 
-            svi_filepath: str,
-            building_filepath: str,
-            poi_filepath: str, 
-            lcz_filepath: str,
-            canopy_filepath: str,
-            pop_filepath: str, 
+            svi_filepath: str = '',
+            building_filepath: str = '',
+            poi_filepath: str = '',
+            lcz_filepath: str = '',
+            canopy_filepath: str = '',
+            pop_filepath: str = '',
             bandwidth: int = 0,
             minimum_area: int = 30,
             knn: list = [3],
@@ -3169,54 +3169,55 @@ class Map(ipyleaflet.Map):
     
             print(f'Network constructed. Time taken: {round(time.time() - start)}.')
 
-            # Add SVI to edges
-            svi_data = gpd.read_parquet(svi_filepath)
+            if svi_filepath != '':
+                # Add SVI to edges
 
-            # Generate edge uids
-            svi_data['uv'] = svi_data['u']+svi_data['v']
-            edges['uv'] = edges['u'] + edges['v']
+                svi_data = gpd.read_parquet(svi_filepath)
 
-            # Proportion
-            count_cols = [col for col in svi_data.columns if 'counts' in col]
-            score_cols = [col for col in svi_data.columns if 'score' in col]
-            pixel_cols = [col for col in svi_data.columns if 'pixels' in col]
-            svi_data[pixel_cols] = svi_data[pixel_cols].div(svi_data['Total'], axis=0)
+                # Generate edge uids
+                svi_data['uv'] = svi_data['u']+svi_data['v']
+                edges['uv'] = edges['u'] + edges['v']
 
-            # Add visual entropy
-            svi_data['visual_complexity'] = svi_data[pixel_cols].apply(lambda row: entropy(row), axis=1)
+                # Proportion
+                count_cols = [col for col in svi_data.columns if 'counts' in col]
+                score_cols = [col for col in svi_data.columns if 'score' in col]
+                pixel_cols = [col for col in svi_data.columns if 'pixels' in col]
+                svi_data[pixel_cols] = svi_data[pixel_cols].div(svi_data['Total'], axis=0)
 
+                # Add visual entropy
+                svi_data['visual_complexity'] = svi_data[pixel_cols].apply(lambda row: entropy(row), axis=1)
 
-            # Groupby edge
-            aggr_svi_score = svi_data.groupby(['uv'])[score_cols].aggregate('mean')
-            aggr_svi_pixels = svi_data.groupby(['uv'])[pixel_cols].aggregate('mean')
-            aggr_svi_count = svi_data.groupby(['uv'])[count_cols].aggregate('mean')
-            aggr_svi_complexity = svi_data.groupby(['uv'])['visual_complexity'].aggregate('mean')
+                # Groupby edge
+                aggr_svi_score = svi_data.groupby(['uv'])[score_cols].aggregate('mean')
+                aggr_svi_pixels = svi_data.groupby(['uv'])[pixel_cols].aggregate('mean')
+                aggr_svi_count = svi_data.groupby(['uv'])[count_cols].aggregate('mean')
+                aggr_svi_complexity = svi_data.groupby(['uv'])['visual_complexity'].aggregate('mean')
 
-            # Join pixel mean to network edges
-            edges = edges.merge(aggr_svi_score, on='uv', how='left')
-            edges[score_cols] = edges[score_cols].fillna(edges[score_cols].mean())
+                # Join pixel mean to network edges
+                edges = edges.merge(aggr_svi_score, on='uv', how='left')
+                edges[score_cols] = edges[score_cols].fillna(edges[score_cols].mean())
 
-            # Join pixel mean to network edges
-            edges = edges.merge(aggr_svi_pixels, on='uv', how='left')
-            edges[pixel_cols] = edges[pixel_cols].fillna(edges[pixel_cols].mean())
+                # Join pixel mean to network edges
+                edges = edges.merge(aggr_svi_pixels, on='uv', how='left')
+                edges[pixel_cols] = edges[pixel_cols].fillna(edges[pixel_cols].mean())
 
-            # Join count mean to network edges
-            edges = edges.merge(aggr_svi_count, on='uv', how='left')
-            edges[count_cols] = edges[count_cols].fillna(edges[count_cols].mean())
+                # Join count mean to network edges
+                edges = edges.merge(aggr_svi_count, on='uv', how='left')
+                edges[count_cols] = edges[count_cols].fillna(edges[count_cols].mean())
 
-            # Join count mean to network edges
-            edges = edges.merge(aggr_svi_complexity, on='uv', how='left')
-            edges['visual_complexity'] = edges['visual_complexity'].fillna(edges['visual_complexity'].mean())
+                # Join count mean to network edges
+                edges = edges.merge(aggr_svi_complexity, on='uv', how='left')
+                edges['visual_complexity'] = edges['visual_complexity'].fillna(edges['visual_complexity'].mean())
 
-            # Add SVI counts
-            edge_svi_count_series = svi_data['uv'].value_counts()
-            edge_svi_count_series.name = 'Number_of_SVI'
-            edges = edges.merge(edge_svi_count_series, on='uv', how='left')
-            edges['Number_of_SVI'] = edges['Number_of_SVI'].replace(np.nan, 0)
+                # Add SVI counts
+                edge_svi_count_series = svi_data['uv'].value_counts()
+                edge_svi_count_series.name = 'Number_of_SVI'
+                edges = edges.merge(edge_svi_count_series, on='uv', how='left')
+                edges['Number_of_SVI'] = edges['Number_of_SVI'].replace(np.nan, 0)
 
-            print(f'SVI attributes computed. Time taken: {round(time.time() - start)}.')
-            
-            self.svi = svi_data
+                print(f'SVI attributes computed. Time taken: {round(time.time() - start)}.')
+                
+                self.svi = svi_data
 
             
         # Compute and add building attributes.
@@ -3225,84 +3226,166 @@ class Map(ipyleaflet.Map):
             building_polygon = self.buildings
 
         else:
-            buildings = get_overture_buildings(building_filepath)
+            if building_filepath != '':
+                buildings = get_overture_buildings(building_filepath)
+                
+                # Process geometry and attributes for Overture buildings; locally projects
+                buildings = preprocess_osm_building_geometry(buildings, minimum_area=30, prefix='overture')
+
+                # Obtain uniqu e ids for buildings
+                buildings = assign_numerical_id_suffix(buildings, prefix='overture')
+                buildings = buildings.reset_index(drop=True)
+
+                buildings['bid'] = buildings.index
+                buildings['bid_area'] = buildings.geometry.area
+                buildings['bid_perimeter'] = buildings.geometry.length
+                building_centroids = buildings.geometry.centroid
+                buildings = buildings[['bid', 'bid_area', 'bid_perimeter', 'geometry']]
+
             
-            # Process geometry and attributes for Overture buildings; locally projects
-            buildings = preprocess_osm_building_geometry(buildings, minimum_area=30, prefix='overture')
+                # Compute building attributes
+                buildings = compute_circularcompactness(buildings, element='bid')
+                buildings = compute_convexity(buildings, element='bid')
+                buildings = compute_corners(buildings, element='bid')
+                buildings = compute_elongation(buildings, element='bid')
+                buildings = compute_orientation(buildings, element='bid')
+                # building_polygon = compute_shared_wall_ratio(building_polygon, element='bid')
+                buildings = compute_longest_axis_length(buildings, element='bid')
+                buildings = compute_equivalent_rectangular_index(buildings, element='bid')
+                buildings = compute_fractaldim(buildings, element='bid')
+                buildings = compute_rectangularity(buildings, element='bid')
+                buildings = compute_square_compactness(buildings, element='bid')
+                buildings = compute_shape_index(buildings, element='bid')
+                buildings = compute_squareness(buildings, element='bid')
+                buildings = compute_complexity(buildings, element='bid')
 
-            # Obtain uniqu e ids for buildings
-            buildings = assign_numerical_id_suffix(buildings, prefix='overture')
-            buildings = buildings.reset_index(drop=True)
+                attr_cols = ['bid_area', 'bid_perimeter', 'bid_circ_compact', 'bid_convexity',
+                'bid_corners', 'bid_elongation', 'bid_orientation', 'bid_longest_axis_length',
+                'bid_eri', 'bid_fractaldim', 'bid_rectangularity', 'bid_squareness',
+                'bid_square_compactness', 'bid_shape_idx', 'bid_complexity']
 
-            buildings['bid'] = buildings.index
-            buildings['bid_area'] = buildings.geometry.area
-            buildings['bid_perimeter'] = buildings.geometry.length
-            building_centroids = buildings.geometry.centroid
-            buildings = buildings[['bid', 'bid_area', 'bid_perimeter', 'geometry']]
+                if return_neighbours == 'knn':
 
-            
-            # Compute building attributes
-            buildings = compute_circularcompactness(buildings, element='bid')
-            buildings = compute_convexity(buildings, element='bid')
-            buildings = compute_corners(buildings, element='bid')
-            buildings = compute_elongation(buildings, element='bid')
-            buildings = compute_orientation(buildings, element='bid')
-            # building_polygon = compute_shared_wall_ratio(building_polygon, element='bid')
-            buildings = compute_longest_axis_length(buildings, element='bid')
-            buildings = compute_equivalent_rectangular_index(buildings, element='bid')
-            buildings = compute_fractaldim(buildings, element='bid')
-            buildings = compute_rectangularity(buildings, element='bid')
-            buildings = compute_square_compactness(buildings, element='bid')
-            buildings = compute_shape_index(buildings, element='bid')
-            buildings = compute_squareness(buildings, element='bid')
-            buildings = compute_complexity(buildings, element='bid')
+                    def filter_threshold(nn, dist):
+                        return {k:v for k,v in zip(nn, dist) if v <= knn_threshold}
+                    
+                    # Compute attributes
+                    for i in knn:
+                        buildings = building_knn_nearest(buildings, knn=i)
+                        buildings[f'{i}-nn-threshold'] = buildings.apply(lambda row: filter_threshold(row[f'{i}-nn-idx'], row[f'{i}-dist']), axis=1)
 
-            attr_cols = ['bid_area', 'bid_perimeter', 'bid_circ_compact', 'bid_convexity',
-            'bid_corners', 'bid_elongation', 'bid_orientation', 'bid_longest_axis_length',
-            'bid_eri', 'bid_fractaldim', 'bid_rectangularity', 'bid_squareness',
-            'bid_square_compactness', 'bid_shape_idx', 'bid_complexity']
+                    buildings = compute_knn_aggregate(buildings, attr_cols)
+                    adj_column = f'{knn[0]}_knn_idx'
 
-            if return_neighbours == 'knn':
+                elif return_neighbours == 'distance':
+                    def remove_self(neighbours, bid):
+                        try:
+                            neighbours.remove(bid)
+                            return neighbours
+                        except ValueError:
+                            return neighbours
+                    
+                    for i in distance_threshold:
+                        buffer_gdf = gpd.GeoDataFrame(data={'buffer_id':buildings.index}, crs=buildings.crs, geometry = building_centroids)
+                        buffer_gdf['geometry'] = buffer_gdf.geometry.buffer(i)
 
-                def filter_threshold(nn, dist):
-                    return {k:v for k,v in zip(nn, dist) if v <= knn_threshold}
+                        # Spatial intersection of building
+                        res_intersection = buildings.overlay(buffer_gdf, how='intersection')
+                        buildings[f'{i}_dist_idx'] = res_intersection.groupby(['buffer_id'])['bid'].agg(list)
+                        buildings[f'{i}_dist_idx'] = buildings.apply(lambda row: remove_self(row[f'{i}_dist_idx'], row['bid']), axis=1)
+
+                        for attr in attr_cols:
+                            mean_series = res_intersection.groupby(['buffer_id'])[attr].mean()
+                            std_series = res_intersection.groupby(['buffer_id'])[attr].std()
+                            df = pd.DataFrame({f'{i}m_{attr}_mean':mean_series.values, f'{i}m_{attr}_stdev':std_series.values})
+                            buildings = gpd.GeoDataFrame(pd.concat([buildings,df],axis=1))
+                    
+                    adj_column = f'{distance_threshold[0]}_dist_idx'
+
+                buildings = buildings.to_crs('EPSG:4326')
+                self.buildings = buildings
+
+            else: 
+
+                buildings = osm.get_buildings()
+
+                # Process geometry and attributes for Overture buildings
+                buildings = preprocess_osm_building_geometry(buildings, minimum_area=30)
+                # building_polygon = preprocess_osm_building_attributes(building_polygon, return_class_height=False)
+
+                # Obtain unique ids for buildings
+                buildings = assign_numerical_id_suffix(buildings, 'osm')
+
+                id_col = 'osm_id'
+
+                buildings['bid'] = buildings[id_col]
+                buildings['bid_area'] = buildings.geometry.area
+                buildings['bid_perimeter'] = buildings.geometry.length
+                building_centroids = buildings.geometry.centroid
+                buildings = buildings[['bid', 'bid_area', 'bid_perimeter', 'geometry']]
+
+                # Compute building attributes
+                buildings = compute_circularcompactness(buildings, element='bid')
+                buildings = compute_convexity(buildings, element='bid')
+                buildings = compute_corners(buildings, element='bid')
+                buildings = compute_elongation(buildings, element='bid')
+                buildings = compute_orientation(buildings, element='bid')
+                # building_polygon = compute_shared_wall_ratio(building_polygon, element='bid')
+                buildings = compute_longest_axis_length(buildings, element='bid')
+                buildings = compute_equivalent_rectangular_index(buildings, element='bid')
+                buildings = compute_fractaldim(buildings, element='bid')
+                buildings = compute_rectangularity(buildings, element='bid')
+                buildings = compute_square_compactness(buildings, element='bid')
+                buildings = compute_shape_index(buildings, element='bid')
+                buildings = compute_squareness(buildings, element='bid')
+                buildings = compute_complexity(buildings, element='bid')
                 
-                # Compute attributes
-                for i in knn:
-                    buildings = building_knn_nearest(buildings, knn=i)
-                    buildings[f'{i}-nn-threshold'] = buildings.apply(lambda row: filter_threshold(row[f'{i}-nn-idx'], row[f'{i}-dist']), axis=1)
+                # Set computed building data as map attribute
+                attr_cols = ['bid_area', 'bid_perimeter', 'bid_circ_compact', 'bid_convexity',
+                'bid_corners', 'bid_elongation', 'bid_orientation', 'bid_longest_axis_length',
+                'bid_eri', 'bid_fractaldim', 'bid_rectangularity', 'bid_squareness',
+                'bid_square_compactness', 'bid_shape_idx', 'bid_complexity']
 
-                buildings = compute_knn_aggregate(buildings, attr_cols)
-                adj_column = f'{knn[0]}_knn_idx'
+                if return_neighbours == 'knn':
 
-            elif return_neighbours == 'distance':
-                def remove_self(neighbours, bid):
-                    try:
-                        neighbours.remove(bid)
-                        return neighbours
-                    except ValueError:
-                        return neighbours
-                
-                for i in distance_threshold:
-                    buffer_gdf = gpd.GeoDataFrame(data={'buffer_id':buildings.index}, crs=buildings.crs, geometry = building_centroids)
-                    buffer_gdf['geometry'] = buffer_gdf.geometry.buffer(i)
+                    def filter_threshold(nn, dist):
+                        return {k:v for k,v in zip(nn, dist) if v <= knn_threshold}
+                    
+                    # Compute attributes
+                    for i in knn:
+                        buildings = building_knn_nearest(buildings, knn=i)
+                        buildings[f'{i}-nn-threshold'] = buildings.apply(lambda row: filter_threshold(row[f'{i}-nn-idx'], row[f'{i}-dist']), axis=1)
 
-                    # Spatial intersection of building
-                    res_intersection = buildings.overlay(buffer_gdf, how='intersection')
-                    buildings[f'{i}_dist_idx'] = res_intersection.groupby(['buffer_id'])['bid'].agg(list)
-                    buildings[f'{i}_dist_idx'] = buildings.apply(lambda row: remove_self(row[f'{i}_dist_idx'], row['bid']), axis=1)
+                    buildings = compute_knn_aggregate(buildings, attr_cols)
+                    adj_column = f'{knn[0]}_knn_idx'
 
-                    for attr in attr_cols:
-                        mean_series = res_intersection.groupby(['buffer_id'])[attr].mean()
-                        std_series = res_intersection.groupby(['buffer_id'])[attr].std()
-                        df = pd.DataFrame({f'{i}m_{attr}_mean':mean_series.values, f'{i}m_{attr}_stdev':std_series.values})
-                        buildings = gpd.GeoDataFrame(pd.concat([buildings,df],axis=1))
-                
-                adj_column = f'{distance_threshold[0]}_dist_idx'
+                elif return_neighbours == 'distance':
+                    def remove_self(neighbours, bid):
+                        try:
+                            neighbours.remove(bid)
+                            return neighbours
+                        except ValueError:
+                            return neighbours
+                    
+                    for i in distance_threshold:
+                        buffer_gdf = gpd.GeoDataFrame(data={'buffer_id':buildings.index}, crs=buildings.crs, geometry = building_centroids)
+                        buffer_gdf['geometry'] = buffer_gdf.geometry.buffer(i)
 
-            buildings = buildings.to_crs('EPSG:4326')
-            # Set computed building data as map attribute
-            self.buildings = buildings
+                        # Spatial intersection of building
+                        res_intersection = buildings.overlay(buffer_gdf, how='intersection')
+                        buildings[f'{i}_dist_idx'] = res_intersection.groupby(['buffer_id'])['bid'].agg(list)
+                        buildings[f'{i}_dist_idx'] = buildings.apply(lambda row: remove_self(row[f'{i}_dist_idx'], row['bid']), axis=1)
+
+                        for attr in attr_cols:
+                            mean_series = res_intersection.groupby(['buffer_id'])[attr].mean()
+                            std_series = res_intersection.groupby(['buffer_id'])[attr].std()
+                            df = pd.DataFrame({f'{i}m_{attr}_mean':mean_series.values, f'{i}m_{attr}_stdev':std_series.values})
+                            buildings = gpd.GeoDataFrame(pd.concat([buildings,df],axis=1))
+                    
+                    adj_column = f'{distance_threshold[0]}_dist_idx'
+
+                buildings = buildings.to_crs('EPSG:4326')
+                self.buildings = buildings
 
             print(f'Buildings constructed. Time taken: {round(time.time() - start)}.')
 
@@ -3367,21 +3450,23 @@ class Map(ipyleaflet.Map):
             urban_plots['plot_id'] = urban_plots.index
 
             urban_plots = urban_plots.to_crs('EPSG:4326')
-             # Add canopy height
-            print('Loading canopy height map...')
-            canopy_vars = ['canopy_mean', 'canopy_stdev', 'canopy_skewness', 'canopy_kurtosis']
 
-            mosaic, meta = load_npz_as_raster(canopy_filepath)
-            self.canopy = mosaic
-            self.canopy_meta = meta
+            if canopy_filepath != '':
+                # Add canopy height
+                print('Loading canopy height map...')
+                canopy_vars = ['canopy_mean', 'canopy_stdev', 'canopy_skewness', 'canopy_kurtosis']
 
-            if (mosaic[0].shape[0] >100000) or (mosaic[0].shape[1] >100000):
-                canopy_df = mask_raster_with_gdf_large_raster(urban_plots, mosaic, meta)
-            else:
-                canopy_df = mask_raster_with_gdf(urban_plots, mosaic, meta)
-            canopy_df = canopy_df[['canopy_mean', 'canopy_stdev', 'canopy_skewness', 'canopy_kurtosis', 'plot_id']]
-            urban_plots = urban_plots.merge(canopy_df, on='plot_id', how='left')
-            urban_plots[canopy_vars] = urban_plots[canopy_vars].fillna(0)
+                mosaic, meta = load_npz_as_raster(canopy_filepath)
+                self.canopy = mosaic
+                self.canopy_meta = meta
+
+                if (mosaic[0].shape[0] >100000) or (mosaic[0].shape[1] >100000):
+                    canopy_df = mask_raster_with_gdf_large_raster(urban_plots, mosaic, meta)
+                else:
+                    canopy_df = mask_raster_with_gdf(urban_plots, mosaic, meta)
+                canopy_df = canopy_df[['canopy_mean', 'canopy_stdev', 'canopy_skewness', 'canopy_kurtosis', 'plot_id']]
+                urban_plots = urban_plots.merge(canopy_df, on='plot_id', how='left')
+                urban_plots[canopy_vars] = urban_plots[canopy_vars].fillna(0)
 
             print('Adding building morphology to plots...')
             # Add building id to plot
@@ -3420,57 +3505,59 @@ class Map(ipyleaflet.Map):
             urban_plots = compute_complexity(urban_plots, element = 'plot')
             urban_plots = urban_plots.fillna(0)
 
-            # Add pois to urban plot
-            print('Adding poi categories to plots...')
-            poi_columns = ['Cultural Institutions', 'Groceries', 'Parks', 'Religious Organizations', 'Restaurants', 'Schools', 'Services', 'Drugstores', 'Healthcare']
-            pois = gpd.read_parquet(poi_filepath)
-            self.pois = pois
+            if poi_filepath != '':
+                # Add pois to urban plot
+                print('Adding poi categories to plots...')
+                poi_columns = ['Cultural Institutions', 'Groceries', 'Parks', 'Religious Organizations', 'Restaurants', 'Schools', 'Services', 'Drugstores', 'Healthcare']
+                pois = gpd.read_parquet(poi_filepath)
+                self.pois = pois
 
-            poi_intersection = pois.overlay(urban_plots)
-            poi_series = poi_intersection.groupby(['plot_id'])['Category'].value_counts()
-            pois_df = pd.DataFrame(index = poi_series.index, data = poi_series.values).reset_index()
-            pois_df = pd.pivot(pois_df, index='plot_id', columns='Category', values=0).fillna(0)
+                poi_intersection = pois.overlay(urban_plots)
+                poi_series = poi_intersection.groupby(['plot_id'])['Category'].value_counts()
+                pois_df = pd.DataFrame(index = poi_series.index, data = poi_series.values).reset_index()
+                pois_df = pd.pivot(pois_df, index='plot_id', columns='Category', values=0).fillna(0)
 
-            for i in poi_columns:
-                if i not in set(pois_df.columns):
-                    pois_df[i] = 0
-                elif i in set(pois_df.columns):
-                    pois_df[i] = pois_df[i].replace(np.nan, 0)
-            pois_df = pois_df[poi_columns]
+                for i in poi_columns:
+                    if i not in set(pois_df.columns):
+                        pois_df[i] = 0
+                    elif i in set(pois_df.columns):
+                        pois_df[i] = pois_df[i].replace(np.nan, 0)
+                pois_df = pois_df[poi_columns]
 
-            urban_plots = urban_plots.merge(pois_df, on='plot_id', how='left')
-            urban_plots[poi_columns] = urban_plots[poi_columns].fillna(0)
+                urban_plots = urban_plots.merge(pois_df, on='plot_id', how='left')
+                urban_plots[poi_columns] = urban_plots[poi_columns].fillna(0)
 
-            # Add LCZ
-            print('Adding LCZ mapping to plots...')
-            lcz_array = raster2gdf(lcz_filepath, zoom=True, boundary=self.polygon_bounds, same_geometry=False)
-            self.lcz = lcz_array
-            res_intersection = lcz_array.overlay(urban_plots)
-            lcz_series = res_intersection.groupby('plot_id')['value'].value_counts()
+            if lcz_filepath != '':
+                # Add LCZ
+                print('Adding LCZ mapping to plots...')
+                lcz_array = raster2gdf(lcz_filepath, zoom=True, boundary=self.polygon_bounds, same_geometry=False)
+                self.lcz = lcz_array
+                res_intersection = lcz_array.overlay(urban_plots)
+                lcz_series = res_intersection.groupby('plot_id')['value'].value_counts()
 
-            lcz_df = pd.DataFrame(index = lcz_series.index, data = lcz_series.values).reset_index()
-            # return lcz_df
-            lcz_df = pd.pivot(lcz_df, index='plot_id', columns='value', values=0).fillna(0)
-                    
-            # Sum across rows to get total for each row
-            row_totals = lcz_df.sum(axis=1)
-            lcz_df = lcz_df.div(row_totals, axis=0) * 100
+                lcz_df = pd.DataFrame(index = lcz_series.index, data = lcz_series.values).reset_index()
+                # return lcz_df
+                lcz_df = pd.pivot(lcz_df, index='plot_id', columns='value', values=0).fillna(0)
+                        
+                # Sum across rows to get total for each row
+                row_totals = lcz_df.sum(axis=1)
+                lcz_df = lcz_df.div(row_totals, axis=0) * 100
 
-            # Rename columns
-            lcz_df.columns = ['lcz_' + str(col) for col in lcz_df.columns]
+                # Rename columns
+                lcz_df.columns = ['lcz_' + str(col) for col in lcz_df.columns]
 
-            lcz_column_names = ['lcz_'+str(i) for i in range(0,18)]
-            for i in lcz_column_names:
-                if i not in set(lcz_df.columns):
-                    lcz_df[i] = 0
-                elif i in set(lcz_df.columns):
-                    lcz_df[i] = lcz_df[i].replace(np.nan, 0)
-            
-            lcz_df = lcz_df[lcz_column_names]
-            
-            # Join pixel mean to network edges
-            urban_plots = urban_plots.merge(lcz_df, on='plot_id', how='left')
-            urban_plots[lcz_column_names] = urban_plots[lcz_column_names].fillna(0)
+                lcz_column_names = ['lcz_'+str(i) for i in range(0,18)]
+                for i in lcz_column_names:
+                    if i not in set(lcz_df.columns):
+                        lcz_df[i] = 0
+                    elif i in set(lcz_df.columns):
+                        lcz_df[i] = lcz_df[i].replace(np.nan, 0)
+                
+                lcz_df = lcz_df[lcz_column_names]
+                
+                # Join pixel mean to network edges
+                urban_plots = urban_plots.merge(lcz_df, on='plot_id', how='left')
+                urban_plots[lcz_column_names] = urban_plots[lcz_column_names].fillna(0)
 
             # Add population
             print('Adding population counts to plots...')
@@ -3481,47 +3568,48 @@ class Map(ipyleaflet.Map):
             # Example usage
             bounding_box = self.polygon_bounds.geometry.total_bounds  # Example bounding box (xmin, ymin, xmax, ymax)
 
-            tif_files = glob.glob(os.path.join(pop_filepath, '*.tif'))
+            if pop_filepath != '':
+                tif_files = glob.glob(os.path.join(pop_filepath, '*.tif'))
 
-            valid_tif_files = find_valid_tif_files(tif_files, bounding_box)
-            for subgroup in pop_subgroups:
-                current_paths = []
+                valid_tif_files = find_valid_tif_files(tif_files, bounding_box)
+                for subgroup in pop_subgroups:
+                    current_paths = []
 
-                for path in valid_tif_files:
-                    if subgroup == 'men':
-                        if all(x in path for x in subgroup) and ('women' not in path):
-                            current_paths.append(path)
-                    else:
-                        if subgroup in path:
-                            current_paths.append(path)
+                    for path in valid_tif_files:
+                        if subgroup == 'men':
+                            if all(x in path for x in subgroup) and ('women' not in path):
+                                current_paths.append(path)
+                        else:
+                            if subgroup in path:
+                                current_paths.append(path)
 
-                if subgroup == 'population':
-                    subgroup_pop_gdf = gpd.GeoDataFrame()
-                    for subgroup_tif_fp in current_paths:
-                        temp_subgroup_pop_gdf = raster2gdf(subgroup_tif_fp, zoom=True, boundary=self.polygon_bounds, same_geometry=False)
-                        temp_subgroup_pop_gdf = temp_subgroup_pop_gdf.fillna(0)
-                        temp_subgroup_pop_gdf = temp_subgroup_pop_gdf.rename(columns={'value':subgroup})
-                        subgroup_pop_gdf = pd.concat([subgroup_pop_gdf, temp_subgroup_pop_gdf], ignore_index=True, axis=0)
+                    if subgroup == 'population':
+                        subgroup_pop_gdf = gpd.GeoDataFrame()
+                        for subgroup_tif_fp in current_paths:
+                            temp_subgroup_pop_gdf = raster2gdf(subgroup_tif_fp, zoom=True, boundary=self.polygon_bounds, same_geometry=False)
+                            temp_subgroup_pop_gdf = temp_subgroup_pop_gdf.fillna(0)
+                            temp_subgroup_pop_gdf = temp_subgroup_pop_gdf.rename(columns={'value':subgroup})
+                            subgroup_pop_gdf = pd.concat([subgroup_pop_gdf, temp_subgroup_pop_gdf], ignore_index=True, axis=0)
 
-                else: 
-                    new_pop_gdf = pd.DataFrame()
-                    for subgroup_tif_fp in current_paths:
-                        temp_new_pop_gdf = raster2gdf(subgroup_tif_fp, zoom=True, boundary=self.polygon_bounds, same_geometry=True)
-                        temp_new_pop_gdf = temp_new_pop_gdf.fillna(0)
-                        temp_new_pop_gdf = temp_new_pop_gdf.rename(columns={'value':subgroup})   
-                        new_pop_gdf = pd.concat([new_pop_gdf, temp_new_pop_gdf], ignore_index=True, axis=0)
+                    else: 
+                        new_pop_gdf = pd.DataFrame()
+                        for subgroup_tif_fp in current_paths:
+                            temp_new_pop_gdf = raster2gdf(subgroup_tif_fp, zoom=True, boundary=self.polygon_bounds, same_geometry=True)
+                            temp_new_pop_gdf = temp_new_pop_gdf.fillna(0)
+                            temp_new_pop_gdf = temp_new_pop_gdf.rename(columns={'value':subgroup})   
+                            new_pop_gdf = pd.concat([new_pop_gdf, temp_new_pop_gdf], ignore_index=True, axis=0)
 
-                    subgroup_pop_gdf = pd.concat([subgroup_pop_gdf, new_pop_gdf], axis=1)
+                        subgroup_pop_gdf = pd.concat([subgroup_pop_gdf, new_pop_gdf], axis=1)
 
-            self.pop = subgroup_pop_gdf
-            res_intersection = gpd.sjoin(subgroup_pop_gdf, urban_plots, how='inner')
+                self.pop = subgroup_pop_gdf
+                res_intersection = gpd.sjoin(subgroup_pop_gdf, urban_plots, how='inner')
 
-            subgroup_pop_series = res_intersection.groupby('plot_id')[['population','men','women','elderly','youth','children']].aggregate('sum')
+                subgroup_pop_series = res_intersection.groupby('plot_id')[['population','men','women','elderly','youth','children']].aggregate('sum')
 
-            # Join pixel mean to network edges
-            urban_plots = urban_plots.merge(subgroup_pop_series, on='plot_id', how='left')
-            urban_plots[['population','men','women','elderly','youth','children']] = urban_plots[['population','men','women','elderly','youth','children']].fillna(0)
-            
+                # Join pixel mean to network edges
+                urban_plots = urban_plots.merge(subgroup_pop_series, on='plot_id', how='left')
+                urban_plots[['population','men','women','elderly','youth','children']] = urban_plots[['population','men','women','elderly','youth','children']].fillna(0)
+                
             urban_plots['geometry'] = urban_plots.make_valid()
 
             self.urban_plots = urban_plots
