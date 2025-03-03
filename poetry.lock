@@ -2089,7 +2089,7 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.9"
-content-hash = "00ae7f1cc7517802dc1bd0cd33d2b9ffa81531b5c4a07312b3d2a258d44d324d"
+content-hash = "ff7fa7cad26bd480195e1753fd346ee08a775208bd247f13f6b7c1050098b230"
 
 [metadata.files]
 affine = []

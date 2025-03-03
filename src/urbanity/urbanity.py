@@ -38,7 +38,7 @@ from .utils import get_country_centroids, finetune_poi, get_available_precompute
                     get_building_to_street_edges, get_edge_nodes, get_building_to_building_edges, get_intersection_to_street_edges, \
                     get_buildings_in_plot_edges, get_edges_along_plot, add_super_node, remove_non_numeric_columns_objects, standardise_and_scale, \
                     fill_na_in_objects, one_hot_encode_categorical, save_to_h5, save_to_npz
-
+from .visualisation import plot_graph
 from .geom import *
 from .building import *
 from .population import get_meta_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, load_npz_as_raster, mask_raster_with_gdf, \
@@ -56,6 +56,7 @@ class Map(ipyleaflet.Map):
         Args:
             country (str, optional): Name of country to position map view. Defaults to None.
         """        
+        self.location = country
         self.bbox = None
         self.polygon_bounds = None
         self.network = []
@@ -65,6 +66,8 @@ class Map(ipyleaflet.Map):
         self.svi = None
         self.pois = None
         self.urban_plots = None
+        self.objects = None
+        self.connections = None
 
         if os.path.isdir('./data'):
             self.directory = "./data"
@@ -184,7 +187,12 @@ class Map(ipyleaflet.Map):
         timestamp_columns = gdf.select_dtypes(include=['datetime64', 'timedelta64']).columns
         gdf = gdf.drop(columns=timestamp_columns)
 
+        
+        if len(gdf) > 1:
+            gdf = dissolve_poly(gdf, self.country)
+
         # Assign polygon boundary attribute to polygon object
+        gdf = gdf.to_crs('epsg:4326')
         self.polygon_bounds = gdf
 
         # Add polygon boundary as map layer
@@ -207,6 +215,12 @@ class Map(ipyleaflet.Map):
             print('Polygon bounding layer removed.')
         else:
             print('No polygon layer found on map.')
+
+    def plot_urban_graph(self):
+        deck = plot_graph(self.polygon_bounds, self.objects)
+        return deck
+    
+
 
     def check_osm_buildings(self,
                             location: str,
@@ -3000,7 +3014,7 @@ class Map(ipyleaflet.Map):
     
     def get_urban_graph(
             self, 
-            network_filepath: str, 
+            network_filepath: str = '', 
             svi_filepath: str = '',
             building_filepath: str = '',
             poi_filepath: str = '',
@@ -3063,6 +3077,19 @@ class Map(ipyleaflet.Map):
             G_buff_trunc_loop, nodes, edges = self.network[0], self.network[1], self.network[2]
         
         else:
+            if network_filepath == '':
+                try:
+                    fp = get_data(self.location, directory = self.directory)
+                    print('Creating data folder and downloading osm street data...')
+                except ValueError:
+                    fp = get_data(self.country, directory = self.directory)
+                    print(f"ValueError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+                except ValueError:
+                    raise ValueError('No osm data found for specified location.')
+
+                network_filepath = fp
+                print('Data extracted successfully. Proceeding to construct street network.')
+
             # Project and buffer original polygon to examine nodes outside boundary
             try:
                 original_bbox = self.polygon_bounds.geometry[0]
@@ -3072,7 +3099,7 @@ class Map(ipyleaflet.Map):
             # catch when it hasn't even been defined 
             except (AttributeError, NameError):
                 raise Exception('Please delimit a bounding box.')
-
+            
             # Obtain nodes and edges within buffered polygon
             osm = pyrosm.OSM(network_filepath, bounding_box=buffered_bbox)
             
@@ -3637,6 +3664,8 @@ class Map(ipyleaflet.Map):
 
 
         print("Total elapsed time --- %s seconds ---" % round(time.time() - start))
+        self.objects = objects
+        self.connections = connections
 
         if save_as_h5:
             # Preprocess graph

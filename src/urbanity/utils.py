@@ -460,7 +460,7 @@ def save_to_h5(filepath, gdf_dict, array_dict):
             f.create_dataset(array_key, data=array_data)
 
 def load_npz(filepath):
-    out = np.load(filepath)
+    out = np.load(filepath, allow_pickle=True)
     objects = {}
     connections = {}
 
