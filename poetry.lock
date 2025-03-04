@@ -1373,6 +1373,22 @@ optional = false
 python-versions = ">=3.8"
 
 [[package]]
+name = "pydeck"
+version = "0.9.1"
+description = "Widget for deck.gl maps"
+category = "main"
+optional = false
+python-versions = ">=3.8"
+
+[package.dependencies]
+jinja2 = ">=2.10.1"
+numpy = ">=1.16.4"
+
+[package.extras]
+carto = ["pydeck-carto"]
+jupyter = ["ipywidgets (>=7,<8)", "traitlets (>=4.3.2)", "ipython (>=5.8.0)", "ipykernel (>=5.1.2)"]
+
+[[package]]
 name = "pygments"
 version = "2.19.1"
 description = "Pygments is a syntax highlighting package written in Python."
@@ -2089,7 +2105,7 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.9"
-content-hash = "ff7fa7cad26bd480195e1753fd346ee08a775208bd247f13f6b7c1050098b230"
+content-hash = "1a481cc7121ea00072ffffc90cb516d7a10256a7888c65a2174f5300fc16d402"
 
 [metadata.files]
 affine = []
@@ -2188,6 +2204,7 @@ psutil = []
 ptyprocess = []
 pure-eval = []
 pycparser = []
+pydeck = []
 pygments = []
 pyogrio = []
 pyparsing = []
