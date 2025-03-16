@@ -98,7 +98,7 @@ def building_knn_nearest(gdf, knn=3):
     """    
     from scipy.spatial import cKDTree
     
-    nA = np.array(list(gdf['building_centroid'].apply(lambda x: (x.x, x.y))))
+    nA = np.array(list(gdf['bid_centroid'].apply(lambda x: (x.x, x.y))))
     tree = cKDTree(nA)
     dd, ii = tree.query(nA, k = list(range(2, knn+2)))
 

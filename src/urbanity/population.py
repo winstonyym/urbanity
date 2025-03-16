@@ -738,7 +738,7 @@ def mask_raster_with_gdf(gdf, raster, meta):
     return canopy_df
 
 
-def download_tiff_from_path(lcz_path):
+def download_pop_tiff_from_path(lcz_path):
     """
     Download and read a TIFF file from a given URL into a rasterio object.
     Handles cases where the TIFF is inside a ZIP archive.

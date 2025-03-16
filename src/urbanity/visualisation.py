@@ -1,7 +1,7 @@
 import pydeck as pdk
 
 def plot_graph(bbox, objects):
-
+    objects['building'] = objects['building'].drop(columns='bid_centroid')
     centerx, centery = bbox.geometry[0].centroid.x, bbox.geometry[0].centroid.y
 
     # Define a PyDeck layer for polygons
@@ -30,6 +30,15 @@ def plot_graph(bbox, objects):
         get_line_color='[247, 191, 111, 50]', # Line color (RGB)
         line_width_min_pixels=3,
     )
+
+    # svis = pdk.Layer(
+    #     "ScatterplotLayer",
+    #     objects['intersection'],
+    #     get_position='[x, y]',
+    #     get_fill_color="[204, 255, 51]",  # RGBA color for points
+    #     get_radius=2,
+    # )
+    
 
     intersections = pdk.Layer(
         "ScatterplotLayer",

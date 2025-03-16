@@ -20,6 +20,7 @@ geopandas = "^1.0.1"
 numpy = "1.26.4"
 pyrobuf = "^0.9.3"
 pydeck = "^0.9.1"
+dotenv = "^0.9.9"
 
 [tool.poetry.dev-dependencies]
 jupyter = "^1.0.0"

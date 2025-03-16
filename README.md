@@ -61,9 +61,46 @@ Urbanity is built on several geospatial packages (e.g., GeoPandas, ipyleaflet, r
 $ chmod +x ./setup.sh
 $ ./setup.sh
 ```
+## Urbanity includes optional integration with external APIs
+### **Google Earth Engine**
 
-4. Installation completed and you should be able to use urbanity without issues.
+Google earth engine (GEE) API and [community catalog](https://gee-community-catalog.org/projects/#accessibility-and-findability) provides open access to thousands of remote sensing data layers. Academic users can register for a free Google Earth Engine research account [here](https://code.earthengine.google.com/register)
 
+#### Authenticate Google Earth Engine
+```
+import ee
+ee.Authenticate()
+ee.Initialize(project='your-project-id')
+```
+
+
+### **Mapillary**
+
+Mapillary hosts the world's largest selection of crowdsourced streetview imagery which covers most cities in the world. Request for an access token [here](https://www.mapillary.com/developer/api-documentation)
+
+
+### **Mapbox**
+
+Mapbox hosts a collection of freely available high resolution satellite imagery with global coverage. Request for an access token in account developer page [here](https://www.mapbox.com/developers)
+
+
+</br>
+
+### (Optional) External API integration
+
+```
+$ touch .env
+```
+
+Open the `.env` file and fill out your registered API keys
+```
+MAPILLARY_API_SECRET=MLY|XXXXXXXXXXXXXXX|XXXXXXXXXXXXXXX
+MAPILLARY_API_TOKEN=MLY|XXXXXXXXXXXXXXX|XXXXXXXXXXXXXXX
+MAPBOX_API_TOKEN=pk.XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+```
+
+
+\
 (Optional) For JupyterLab / JupyterNotebook users, you can additionally add a notebook kernel via:
 
 ```
