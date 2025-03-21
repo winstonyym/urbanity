@@ -291,6 +291,7 @@ def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary
     
     try:
         raster_dataset = rasterio.open(raster_path)
+        boundary = boundary.to_crs(raster_dataset.crs)
     except:
         with rasterio.open(raster_path) as src:
             print(src.profile)
@@ -326,8 +327,9 @@ def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary
             value_array = src.read(1, window=Window(x_off, y_off, x_width-1, y_width-1))
         
         mydf = pd.DataFrame({'value':np.ravel(value_array, order='C')})
-
-        return gpd.GeoDataFrame(data = mydf, crs = raster_dataset.crs, geometry = geom_list)
+        my_gdf = gpd.GeoDataFrame(data = mydf, crs = raster_dataset.crs, geometry = geom_list)
+        my_gdf = my_gdf.to_crs('epsg:4326')
+        return my_gdf
 
     # Raster value array
     value_array = raster_dataset.read(chosen_band)
@@ -357,7 +359,7 @@ def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary
 
         # Option C - Changing from last index dimension first 
         gdf = gpd.GeoDataFrame(data = {'value':np.ravel(value_array, order='C')}, crs = raster_dataset.crs, geometry = gpd.points_from_xy(x=long_coords, y=lat_coords))
-        
+        gdf = gdf.to_crs('epsg:4326')
     return gdf
 
 def mosaic_and_save_tiff(source, dest, name, fmt='tiff'):
