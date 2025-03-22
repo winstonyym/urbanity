@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import matplotlib.gridspec as gridspec
 import rasterio.transform as rtransform
-
+from rasterio.warp import calculate_default_transform, reproject, Resampling
 
 
 
@@ -276,6 +276,48 @@ def download_tiff_from_path(lcz_path):
     else:
         print(f"Failed to download file: {response.status_code}")
 
+def reproject_raster(input_path, output_path):
+    # Paths to input and output files
+
+
+    # The target CRS is EPSG:4326
+    dst_crs = "EPSG:4326"
+
+    # Open the source dataset
+    with rasterio.open(input_path) as src:
+        # Calculate the transform and dimensions of the new raster
+        transform, width, height = calculate_default_transform(
+            src.crs,       # The current coordinate reference system
+            dst_crs,       # The desired coordinate reference system
+            src.width,
+            src.height,
+            *src.bounds     # The bounding coordinates of the original file
+        )
+
+        # Update metadata
+        kwargs = src.meta.copy()
+        kwargs.update({
+            "crs": dst_crs,
+            "transform": transform,
+            "width": width,
+            "height": height
+        })
+
+        # Create and write to the new reprojected raster
+        with rasterio.open(output_path, "w", **kwargs) as dst:
+            for i in range(1, src.count + 1):
+                reproject(
+                    source=rasterio.band(src, i),
+                    destination=rasterio.band(dst, i),
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=transform,
+                    dst_crs=dst_crs,
+                    resampling=Resampling.nearest
+                )
+
+        print(f"Reprojected raster saved to {output_path}")
+        
 def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary=None):
     """Helper function to convert a raster dataset (.tiff) to GeoDataFrame object.
 
@@ -360,6 +402,141 @@ def raster2gdf(raster_path, chosen_band = 1, get_grid=True, zoom=False, boundary
         # Option C - Changing from last index dimension first 
         gdf = gpd.GeoDataFrame(data = {'value':np.ravel(value_array, order='C')}, crs = raster_dataset.crs, geometry = gpd.points_from_xy(x=long_coords, y=lat_coords))
         gdf = gdf.to_crs('epsg:4326')
+    return gdf
+
+def raster2gdf_with_reprojection(raster_path, boundary_gdf, chosen_band=1):
+    """
+    Example function that:
+      1) Reads a raster,
+      2) Reprojects entire data to EPSG:4326 in memory,
+      3) Zooms to a user boundary, also in EPSG:4326,
+      4) Returns a polygonal GeoDataFrame of the zoomed portion.
+    """
+    dst_crs = "EPSG:4326"
+    # ---------------------------
+    # 1. Read entire source raster
+    # ---------------------------
+    with rasterio.open(raster_path) as src:
+        src_data = src.read(chosen_band)
+        src_transform = src.transform
+        src_crs = src.crs
+        width = src.width
+        height = src.height
+        bounds = src.bounds
+
+    # ---------------------------
+    # 2. Reproject to EPSG:4326
+    # ---------------------------
+
+    
+    dst_transform, dst_width, dst_height = calculate_default_transform(
+        src_crs,        # from
+        dst_crs,        # to
+        width, 
+        height, 
+        *bounds
+    )
+
+    # Prepare empty array for reprojected data
+    dst_data = np.empty((dst_height, dst_width), dtype=src_data.dtype)
+
+    reproject(
+        source=src_data,
+        destination=dst_data,
+        src_transform=src_transform,
+        src_crs=src_crs,
+        dst_transform=dst_transform,
+        dst_crs=dst_crs,
+        resampling=Resampling.nearest
+    )
+
+    # Reproject the boundary to EPSG:4326 as well
+    boundary_gdf = boundary_gdf.to_crs(dst_crs)
+    # ---------------------------
+    # 3. Build the full coordinate mesh (EPSG:4326)
+    #    for the *entire* reprojected raster
+    # ---------------------------
+    # array_bounds returns (bottom, top) in final elements for y, so be mindful
+    full_left, full_bottom, full_right, full_top = array_bounds(
+        dst_height, dst_width, dst_transform
+    )
+
+    xarray_full = np.linspace(full_left,   full_right,  dst_width + 1)
+    yarray_full = np.linspace(full_top,    full_bottom, dst_height + 1)
+
+    # Pixel half-sizes in the reprojected space
+    half_x = (full_right  - full_left)   / dst_width  / 2
+    half_y = (full_top    - full_bottom) / dst_height / 2
+
+    # ---------------------------
+    # 4. Determine the zoom window in EPSG:4326
+    #    from boundary_gdf's total_bounds
+    # ---------------------------
+    xmin, ymin, xmax, ymax = boundary_gdf.total_bounds
+
+    # We want to include any pixel whose boundary overlaps
+    # the boundary_gdf bounding box
+    list_x_range = [
+        x for x in xarray_full
+        if (x >= xmin - half_x and x <= xmax + half_x)
+    ]
+    list_y_range = [
+        y for y in yarray_full
+        if (y <= ymax + half_y and y >= ymin - half_y)
+    ]
+
+    # Handle edge cases (e.g. boundary outside the raster)
+    if not list_x_range or not list_y_range:
+        print("Boundary is entirely outside the reprojected raster.")
+        return None
+
+    # Offsets in the reprojected array
+    x_off = np.where(xarray_full == list_x_range[0])[0].item()
+    y_off = np.where(yarray_full == list_y_range[0])[0].item()
+
+    # The width/height in pixels of the zoomed region
+    x_width = len(list_x_range) - 1
+    y_height = len(list_y_range) - 1
+
+    # ---------------------------
+    # 5. Slice the reprojected data to get only the zoom
+    #    region
+    # ---------------------------
+    # The data array has shape = (dst_height, dst_width)
+    zoomed_data = dst_data[y_off:(y_off + y_height), x_off:(x_off + x_width)]
+
+    # Build a new transform for this subset
+    from rasterio.windows import Window, transform
+    window = Window(x_off, y_off, x_width, y_height)
+    zoom_transform = transform(window, dst_transform)
+
+    # ---------------------------
+    # 6. Create polygons for each pixel in the zoom region
+    # ---------------------------
+    zoom_left, zoom_bottom, zoom_right, zoom_top = rasterio.transform.array_bounds(
+        y_height, x_width, zoom_transform
+    )
+    # Note: array_bounds -> (left, bottom, right, top)
+
+    zoom_xarray = np.linspace(zoom_left,  zoom_right,  x_width  + 1)
+    zoom_yarray = np.linspace(zoom_top,   zoom_bottom, y_height + 1)
+
+    # Flatten the pixel values
+    vals = zoomed_data.ravel(order='C')
+    df = pd.DataFrame({'value': vals})
+
+    polygons = []
+    for row_i in range(y_height):
+        for col_i in range(x_width):
+            p = Polygon([
+                (zoom_xarray[col_i],   zoom_yarray[row_i]),
+                (zoom_xarray[col_i],   zoom_yarray[row_i+1]),
+                (zoom_xarray[col_i+1], zoom_yarray[row_i+1]),
+                (zoom_xarray[col_i+1], zoom_yarray[row_i])
+            ])
+            polygons.append(p)
+
+    gdf = gpd.GeoDataFrame(df, geometry=polygons, crs=dst_crs)
     return gdf
 
 def mosaic_and_save_tiff(source, dest, name, fmt='tiff'):
@@ -620,4 +797,5 @@ def merge_raster_to_gdf(raster, gdf, id_col = 'plot_id', raster_col='value', ras
         # Join pixel mean to network edges
         gdf = gdf.merge(raster_df, on=id_col, how='left')
     return gdf
+
 
