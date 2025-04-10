@@ -222,7 +222,7 @@ def get_buildings_in_plot_edges(urban_plots, adj_column = '', add_reverse=True):
     start_index = np.array(start_list)
     end_index = np.array(end_list)
     building_to_plot_edges = np.stack([end_index, start_index], axis=1).transpose()
-
+    building_to_plot_edges = building_to_plot_edges.astype(int)
     if add_reverse:
 
         # Edge from neighbouring buildings to main building
@@ -520,20 +520,23 @@ def one_hot_encode_categorical(df, target_col = '', prefix = ''):
     return df
 
 
-def remove_non_numeric_columns_objects(objects):
+def remove_non_numeric_columns_objects(objects, keep_geometry=False):
     objects_new = objects.copy()
     numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']
 
+    if keep_geometry:
+        numerics += ['geometry']
+
     for key, object in objects_new.items():
         only_numerics = object.select_dtypes(include=numerics)
-
-        if key == 'intersections':
-            only_numerics = only_numerics.drop(columns = ['intersection_id', 'osmid', 'x', 'y'], axis=1)
-        elif key == 'urban_plots':
+ 
+        if key == 'intersection':
+            only_numerics = only_numerics.drop(columns = ['intersection_id', 'osmid'], axis=1)
+        elif key == 'plot':
             only_numerics = only_numerics.drop(columns = ['plot_id'], axis=1)
-        elif key == 'buildings':
-            only_numerics = only_numerics.drop(columns = ['bid'], axis=1)
-        elif key == 'streets':
+        elif key == 'building':
+            pass
+        elif key == 'street':
             only_numerics = only_numerics.drop(columns = ['edge_id'], axis=1)
             
         objects_new[key] = only_numerics

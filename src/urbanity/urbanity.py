@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from ipaddress import collapse_addresses
 import os
+import ee
 import json
 import time
 import math
@@ -49,6 +50,9 @@ from .svi import parallel_download_image_in_tiles
 from .satellite import get_and_combine_tiles, get_grid_size, get_tiles_from_bbox, download_satellite_tiles_from_bbox, view_satellite_building_pair, get_max_img_dims, get_building_image_chips, \
                        get_tiles_gdf, download_tiff_from_path, gee_layer_from_boundary, merge_raster_to_gdf
 
+
+from ee.ee_exception import EEException
+
 # Import country coords
 country_dict = get_country_centroids()
 
@@ -79,6 +83,7 @@ class Map(ipyleaflet.Map):
         self.urban_plots = None
         self.objects = None
         self.connections = None
+        self.adj_column = None
 
         if os.path.isdir('./data'):
             self.directory = "./data"
@@ -227,11 +232,10 @@ class Map(ipyleaflet.Map):
         else:
             print('No polygon layer found on map.')
 
-    def plot_urban_graph(self):
-        deck = plot_graph(self.polygon_bounds, self.objects)
+    def plot_urban_graph(self, node_id=''):
+        deck = plot_graph(self.polygon_bounds, self.objects, self.connections, node_id = node_id)
         return deck
     
-
 
     def check_osm_buildings(self,
                             location: str,
@@ -3043,7 +3047,7 @@ class Map(ipyleaflet.Map):
             save_as_npz: bool = False,
             save_filepath: str = '',
             add_satellite_imagery: bool = False,
-            add_gee_layers: dict = {'layers': [], 'methods':[], 'layer_names':[]},
+            add_gee_layers: dict =  {},
             add_lcz: bool = False,
             temporal_years: list = [2025],
             population_layer = 'meta',
@@ -3073,7 +3077,7 @@ class Map(ipyleaflet.Map):
             save_filepath (str): Specifies location to save h5py or npz graph object. 
             add_satellite_imagery (bool): If True, initiates satellite downloading pipeline for buildings.
             add_lcz (bool): If True, obtain global 100m local climate zone data for urban plots.
-            add_gee_layers (dict): Specify dict of layer name, computation methods (proportion or mean)
+            add_gee_layers (dict): Dictionary accepting key, value pairs of lists of GEE layers and computation method. Example: {'layer_names': ['Canopy height'], 'layers': ['users/nlang/ETH_GlobalCanopyHeight_2020_10m_v1'], 'methods':['mean']}.
             population_layer (str): Specifies which population layer to use. Accepts ['meta' (30 meters; demographic subgroups), 'ghs' (100 meters; total population counts)]
             temporal_years (list): Specify the yearly intervals to obtain GHS_BUILT_S_R2023 land cover and population data. Accepts any year from 1975 to 2030.
             satellite_pixel_padding (int): Specifies the number of pixels to pad sides of each building to capture urban context (image size is 512 by 512).
@@ -3178,10 +3182,6 @@ class Map(ipyleaflet.Map):
             edges['edge_id'] = edges.index
             edges = edges[['edge_id', 'u', 'v', 'length','geometry']]
 
-            self.network.append(G_buff_trunc_loop)
-            self.network.append(nodes)
-            self.network.append(edges)
-
 
             # Add network attributes
             proj_nodes = project_gdf(nodes)
@@ -3199,7 +3199,11 @@ class Map(ipyleaflet.Map):
             nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.EigenvectorCentrality, 'Eigenvector Centrality', None)
             nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.KatzCentrality, 'Katz Centrality', None)
             nodes = compute_centrality(G_buff_trunc_loop, nodes, networkit.centrality.PageRank, 'PageRank', None, 0.85, 1e-8, networkit.centrality.SinkHandling.NoSinkHandling, True)
-    
+
+            self.network.append(G_buff_trunc_loop)
+            self.network.append(nodes)
+            self.network.append(edges)
+
             print(f'Network constructed. Time taken: {round(time.time() - start)}.')
 
             if svi_filepath != '':
@@ -3331,11 +3335,11 @@ class Map(ipyleaflet.Map):
                         buildings[f'{i}_dist_idx'] = res_intersection.groupby(['buffer_id'])['bid'].agg(list)
                         buildings[f'{i}_dist_idx'] = buildings.apply(lambda row: remove_self(row[f'{i}_dist_idx'], row['bid']), axis=1)
 
-                        for attr in attr_cols:
-                            mean_series = res_intersection.groupby(['buffer_id'])[attr].mean()
-                            std_series = res_intersection.groupby(['buffer_id'])[attr].std()
-                            df = pd.DataFrame({f'{i}m_{attr}_mean':mean_series.values, f'{i}m_{attr}_stdev':std_series.values})
-                            buildings = gpd.GeoDataFrame(pd.concat([buildings,df],axis=1))
+                        # for attr in attr_cols:
+                        #     mean_series = res_intersection.groupby(['buffer_id'])[attr].mean()
+                        #     std_series = res_intersection.groupby(['buffer_id'])[attr].std()
+                        #     df = pd.DataFrame({f'{i}m_{attr}_mean':mean_series.values, f'{i}m_{attr}_stdev':std_series.values})
+                        #     buildings = gpd.GeoDataFrame(pd.concat([buildings,df],axis=1))
                     
                     adj_column = f'{distance_threshold[0]}_dist_idx'
 
@@ -3394,7 +3398,7 @@ class Map(ipyleaflet.Map):
                         buildings = building_knn_nearest(buildings, knn=i)
                         buildings[f'{i}-nn-threshold'] = buildings.apply(lambda row: filter_threshold(row[f'{i}-nn-idx'], row[f'{i}-dist']), axis=1)
 
-                    buildings = compute_knn_aggregate(buildings, attr_cols)
+                    # buildings = compute_knn_aggregate(buildings, attr_cols)
                     adj_column = f'{knn[0]}-nn-idx'
 
 
@@ -3415,16 +3419,18 @@ class Map(ipyleaflet.Map):
                         buildings[f'{i}_dist_idx'] = res_intersection.groupby(['buffer_id'])['bid'].agg(list)
                         buildings[f'{i}_dist_idx'] = buildings.apply(lambda row: remove_self(row[f'{i}_dist_idx'], row['bid']), axis=1)
 
-                        for attr in attr_cols:
-                            mean_series = res_intersection.groupby(['buffer_id'])[attr].mean()
-                            std_series = res_intersection.groupby(['buffer_id'])[attr].std()
-                            df = pd.DataFrame({f'{i}m_{attr}_mean':mean_series.values, f'{i}m_{attr}_stdev':std_series.values})
-                            buildings = gpd.GeoDataFrame(pd.concat([buildings,df],axis=1))
+                        # for attr in attr_cols:
+                        #     mean_series = res_intersection.groupby(['buffer_id'])[attr].mean()
+                        #     std_series = res_intersection.groupby(['buffer_id'])[attr].std()
+                        #     df = pd.DataFrame({f'{i}m_{attr}_mean':mean_series.values, f'{i}m_{attr}_stdev':std_series.values})
+                        #     buildings = gpd.GeoDataFrame(pd.concat([buildings,df],axis=1))
                     
                     adj_column = f'{distance_threshold[0]}_dist_idx'
 
                 buildings = buildings.to_crs('EPSG:4326')
+                buildings = buildings.drop(columns=['bid_centroid'])
                 self.buildings = buildings
+                self.adj_column = adj_column
 
             print(f'Buildings constructed. Time taken: {round(time.time() - start)}.')
 
@@ -3549,10 +3555,11 @@ class Map(ipyleaflet.Map):
 
             print('Adding building morphology to plots...')
             # Add building id to plot
+            buildings = buildings.reset_index()
             building_urban_plots_intersection = buildings.overlay(urban_plots)
-            urban_plots['bid'] = building_urban_plots_intersection.groupby('plot_id')[['bid']].aggregate(lambda x: list(x))
+            urban_plots['bid'] = building_urban_plots_intersection.groupby('plot_id')[['index']].aggregate(lambda x: list(x))
             urban_plots['bid'] = urban_plots['bid'].fillna(0)
-            urban_plots['plot_building_count'] = urban_plots['bid'].apply(lambda x: len(x) if x !=0 else 0)
+            # urban_plots['plot_building_count'] = urban_plots['index'].apply(lambda x: len(x) if x !=0 else 0)
             
             attr_cols = ['bid_area', 'bid_perimeter', 'bid_circ_compact', 'bid_convexity', 'bid_corners', 'bid_elongation',
                          'bid_orientation', 'bid_longest_axis_length', 'bid_eri', 'bid_fractaldim', 
@@ -3670,24 +3677,35 @@ class Map(ipyleaflet.Map):
                 urban_plots[cols] = urban_plots[cols].fillna(0)
                 urban_plots = urban_plots.rename(columns = {'commercial':'Commercial', 'entertainment':'Entertainment','food':'Food','healthcare':'Healthcare','civic':'Civic', 'institutional':'Institutional', 'recreational':'Recreational', 'social':'Social'})
 
+            if add_gee_layers:
+                for i in range(len(add_gee_layers['layers'])):
+                    layer = add_gee_layers['layers'][i]
+                    method = add_gee_layers['methods'][i]
+                    layer_name = add_gee_layers['layer_names'][i]
+                    
+                    try:
+                        raster_gdf = gee_layer_from_boundary(self.polygon_bounds, layer, band='', index=0)
+                        raster_gdf.columns = [layer_name, 'geometry']
+                    except EEException:
+                        ee.Authenticate()
+                        ee.Initialize()
+                        raster_gdf = gee_layer_from_boundary(self.polygon_bounds, layer, band='', index=0)
+                        raster_gdf.columns = [layer_name, 'geometry']
 
-            for i in len(range(add_gee_layers['layers'])):
-                layer = add_gee_layers['layers'][i]
-                method = add_gee_layers['methods'][i]
-                layer_name = add_gee_layers['layer_names'][i]
-                
-                raster_gdf = gee_layer_from_boundary(self.polygon_bounds, layer, band='', index=0)
-                prop = True if prop=='prop' else False
-                urban_plots = merge_raster_to_gdf(raster_gdf, urban_plots, id_col = 'plot_id', raster_col='value', raster_prefix = 'layer_name', num_classes = 18, prop=prop)
+                    urban_plots = merge_raster_to_gdf(raster_gdf, urban_plots, id_col = 'plot_id', raster_col=layer_name, method=method)
 
 
             if add_lcz:
-                # Add LCZ
-                prop=True
-                lcz_array = gee_layer_from_boundary(self.polygon_bounds, 'RUB/RUBCLIM/LCZ/global_lcz_map/latest', band='', index=0)
-                urban_plots = merge_raster_to_gdf(lcz_array, urban_plots, id_col = 'plot_id', raster_col='value', raster_prefix = 'lcz', num_classes = 18, prop=prop)
+                try:
+                    lcz_array_gdf = gee_layer_from_boundary(self.polygon_bounds, 'RUB/RUBCLIM/LCZ/global_lcz_map/latest', band='', index=0)
+                except EEException:
+                    ee.Authenticate()
+                    ee.Initialize()
+                    lcz_array_gdf = gee_layer_from_boundary(self.polygon_bounds, 'RUB/RUBCLIM/LCZ/global_lcz_map/latest', band='', index=0)
+                    lcz_array_gdf.columns = ['lcz', 'geometry']
 
-            
+                urban_plots = merge_raster_to_gdf(lcz_array_gdf, urban_plots, id_col = 'plot_id', raster_col='lcz', num_classes = 18, method='proportion')
+
 
             # Add population
             if population_layer == 'meta': 
@@ -3891,6 +3909,8 @@ class Map(ipyleaflet.Map):
 
             urban_plots['geometry'] = urban_plots.make_valid()
 
+            urban_plots['plot_id'] = urban_plots.index
+
             self.urban_plots = urban_plots
 
             print(f'Urban plots constructed. Time taken: {round(time.time() - start)}.')
@@ -3899,32 +3919,30 @@ class Map(ipyleaflet.Map):
         objects = {}        
         connections = {}
 
-        objects['plot'] = urban_plots
-        objects['building'] = buildings
-        objects['intersection'] = nodes
-        objects['street'] = edges
+        objects['plot'] = self.urban_plots
+        objects['building'] = self.buildings
+        objects['intersection'] = self.network[1]
+        objects['street'] = self.network[2]
 
         if add_self_as_super_node:
             objects, connections = add_super_node(objects, connections, self.polygon_bounds, target='plot', name='boundary')
 
-        _, connections['plot_rev_plot']= get_plot_to_plot_edges(urban_plots)
-        connections['building_to_street'], connections['street_to_building']  = get_building_to_street_edges(edges, buildings)
-        _, connections['building_rev_building'] = get_building_to_building_edges(buildings, adj_column=adj_column)
-        connections['intersection_to_street'], connections['street_to_intersection'] = get_intersection_to_street_edges(nodes, edges)
-        connections['building_to_plot'], connections['plot_to_building'] = get_buildings_in_plot_edges(urban_plots, adj_column='bid')
-        connections['street_to_plot'], connections['plot_to_street'] = get_edges_along_plot(urban_plots, adj_column='edge_ids')
+        _, connections['plot_rev_plot']= get_plot_to_plot_edges(self.urban_plots)
+        connections['building_to_street'], connections['street_to_building']  = get_building_to_street_edges(self.network[2], self.buildings)
+        _, connections['building_rev_building'] = get_building_to_building_edges(self.buildings, adj_column=self.adj_column)
+        connections['intersection_to_street'], connections['street_to_intersection'] = get_intersection_to_street_edges(self.network[1], self.network[2])
+        connections['building_to_plot'], connections['plot_to_building'] = get_buildings_in_plot_edges(self.urban_plots, adj_column='bid')
+        connections['street_to_plot'], connections['plot_to_street'] = get_edges_along_plot(self.urban_plots, adj_column='edge_ids')
 
 
         print("Total elapsed time --- %s seconds ---" % round(time.time() - start))
-        self.objects = objects
-        self.connections = connections
-
+        
         if save_as_h5:
             # Preprocess graph
     
             process_objects = fill_na_in_objects(objects)
             process_objects = remove_non_numeric_columns_objects(process_objects)
-            process_objects = standardise_and_scale(process_objects)
+            # process_objects = standardise_and_scale(process_objects)
             save_to_h5(save_filepath, process_objects, connections)
             return objects, connections
         
@@ -3938,5 +3956,9 @@ class Map(ipyleaflet.Map):
 
         
         else:
-            return objects, connections
+            process_objects = fill_na_in_objects(objects)
+            process_objects = remove_non_numeric_columns_objects(process_objects, keep_geometry=True)
+            self.objects = process_objects
+            self.connections = connections
+            return process_objects, connections
             

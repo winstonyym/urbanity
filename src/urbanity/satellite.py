@@ -757,30 +757,25 @@ def gee_layer_from_boundary(boundary, layer_name, delta=0.1, band='', index=0):
     return gdf
 
 
-def merge_raster_to_gdf(raster, gdf, id_col = 'plot_id', raster_col='value', raster_prefix = 'lcz', num_classes = 18, prop=True, categorical=True):
+def merge_raster_to_gdf(raster, gdf, id_col = 'plot_id', raster_col='value', num_classes = 1, method='mean'):
     res_intersection = raster.overlay(gdf)
-    val_series = res_intersection.groupby(id_col)[raster_col].value_counts()
 
-    raster_df = pd.DataFrame(index = val_series.index, data = val_series.values).reset_index()
-
-    # return lcz_df
-    raster_df = pd.pivot(raster_df, index=id_col, columns=raster_col, values=0).fillna(0)
-    
-    if categorical: 
+    if method == 'proportion':
         val_series = res_intersection.groupby(id_col)[raster_col].value_counts()
+
         raster_df = pd.DataFrame(index = val_series.index, data = val_series.values).reset_index()
+
         # return lcz_df
         raster_df = pd.pivot(raster_df, index=id_col, columns=raster_col, values=0).fillna(0)
-
-        if prop:
-            # Sum across rows to get total for each row
-            row_totals = raster_df.sum(axis=1)
-            raster_df = raster_df.div(row_totals, axis=0) * 100
+    
+        # Sum across rows to get total for each row
+        row_totals = raster_df.sum(axis=1)
+        raster_df = raster_df.div(row_totals, axis=0) * 100
 
         # Rename columns
-        raster_df.columns = [raster_prefix + '_' + str(col) for col in raster_df.columns]
+        raster_df.columns = [raster_col + '_' + str(col) for col in raster_df.columns]
+        raster_column_names = [raster_col + '_' +str(i) for i in range(0,num_classes)]
 
-        raster_column_names = [raster_prefix + '_' +str(i) for i in range(0,num_classes)]
         for i in raster_column_names:
             if i not in set(raster_df.columns):
                 raster_df[i] = 0
@@ -791,11 +786,21 @@ def merge_raster_to_gdf(raster, gdf, id_col = 'plot_id', raster_col='value', ras
         
         # Join pixel mean to network edges
         gdf = gdf.merge(raster_df, on=id_col, how='left')
-    else: 
-        val_series = res_intersection.groupby(id_col).mean()
+
+    elif method == 'mean': 
+        mean_series = res_intersection.groupby(id_col)[raster_col].mean()
+        mean_series.name = f'{raster_col}_mean'
+
+        std_series = res_intersection.groupby(id_col)[raster_col].std()
+        std_series.name = f'{raster_col}_std'
         
         # Join pixel mean to network edges
-        gdf = gdf.merge(raster_df, on=id_col, how='left')
+        gdf = gdf.merge(mean_series, on=id_col, how='left')
+        gdf[f'{raster_col}_mean'] = gdf[f'{raster_col}_mean'].fillna(0)
+
+        gdf = gdf.merge(std_series, on=id_col, how='left')
+        gdf[f'{raster_col}_std'] = gdf[f'{raster_col}_std'].fillna(0)
+
     return gdf
 
 
