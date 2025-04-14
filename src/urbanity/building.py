@@ -7,6 +7,7 @@ import pyrosm
 import pandas as pd
 import shapely
 from shapely.geometry import Polygon, LineString
+from shapely import wkb
 from pyrosm import get_data
 import pkg_resources
 import numpy as np
@@ -937,3 +938,36 @@ def _calc(geom):
             continue
     deviations = [abs(90 - i) for i in angles]
     return np.mean(deviations)
+
+def get_and_assign_building_heights(filepath, building_gdf):
+    dest_crs = 'epsg:3857'
+
+    heights = pd.read_parquet(filepath)
+
+    # Example: df has a column 'geom_wkb' with WKB in bytes
+    heights['geometry'] = heights['geometry'].apply(wkb.loads)
+
+    heights = gpd.GeoDataFrame(heights, crs='epsg:4326', geometry='geometry')
+
+    proj_building_gdf = building_gdf.to_crs(dest_crs)
+    proj_heights = heights.to_crs(dest_crs)
+    
+    # Add area
+    res_intersection = proj_building_gdf.overlay(proj_heights)
+    res_intersection['coverage_area'] = res_intersection.geometry.area
+
+    # Calculate weighted average height per id
+    weighted_heights = res_intersection.groupby('bid').apply(
+        lambda g: np.average(g['Height'], weights=g['coverage_area'])
+    ).reset_index(name='weighted_height')
+
+    proj_building_gdf = proj_building_gdf.merge(weighted_heights, on='bid', how='left')
+
+    # # Add building centroid for knn computation
+    proj_building_gdf['bid_centroid'] = proj_building_gdf.geometry.centroid
+    proj_building_gdf = building_knn_nearest(proj_building_gdf, knn=1, non_nan_col='weighted_height')
+    proj_building_gdf = compute_knn_aggregate(proj_building_gdf, ['weighted_height'])
+
+    proj_building_gdf = proj_building_gdf.drop(columns = ['weighted_height', 'bid_centroid', '1-nn-idx', '1-dist', '1-nn-idx_weighted_height_stdev'])
+    proj_building_gdf = proj_building_gdf.rename(columns = {'1-nn-idx_weighted_height_mean':'height'})
+    return proj_building_gdf.to_crs('epsg:4326')

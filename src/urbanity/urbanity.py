@@ -7,6 +7,7 @@ warnings.filterwarnings("ignore", category=ShapelyDeprecationWarning)
 warnings.filterwarnings("ignore", category=UserWarning) 
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=RuntimeWarning)
+
 from dotenv import load_dotenv
 
 from ipaddress import collapse_addresses
@@ -46,10 +47,8 @@ from .building import *
 from .population import get_meta_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, load_npz_as_raster, mask_raster_with_gdf, \
                         is_bounding_box_within, find_valid_tif_files, mask_raster_with_gdf_large_raster, download_pop_tiff_from_path, merge_raster_list
 from .topology import compute_centrality, merge_nx_property, merge_nx_attr
-from .svi import parallel_download_image_in_tiles
 from .satellite import get_and_combine_tiles, get_grid_size, get_tiles_from_bbox, download_satellite_tiles_from_bbox, view_satellite_building_pair, get_max_img_dims, get_building_image_chips, \
                        get_tiles_gdf, download_tiff_from_path, gee_layer_from_boundary, merge_raster_to_gdf
-
 
 from ee.ee_exception import EEException
 
@@ -3131,7 +3130,7 @@ class Map(ipyleaflet.Map):
             osm = pyrosm.OSM(network_filepath, bounding_box=buffered_bbox)
             
             nodes, edges = osm.get_network(network_type=network_type, nodes=True)
-            
+
             # Build networkx graph for pre-processing
             G_buff = osm.to_graph(nodes, edges, graph_type="networkx", force_bidirectional=True, retain_all=True)
 
@@ -3186,7 +3185,6 @@ class Map(ipyleaflet.Map):
             # Add network attributes
             proj_nodes = project_gdf(nodes)
             proj_edges = edges.to_crs(proj_nodes.crs)
-
             # Add Degree Centrality, Clustering (Weighted and Unweighted)
 
             nodes = merge_nx_property(nodes, G_buff_trunc_loop.out_degree, 'intersection_degree', None)
@@ -3480,24 +3478,25 @@ class Map(ipyleaflet.Map):
             # Obtain urban plots
             original_bbox = self.polygon_bounds.geometry[0]
             buffered_tp = self.polygon_bounds.copy()
-            buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+            buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=0)
             proj_boundary = project_gdf(buffered_tp)
             proj_boundary = proj_boundary.to_crs(proj_edges.crs)
 
             # Create expanded buffer (buffer bandwidth)
             proj_boundary_expanded = proj_boundary.copy()
             proj_boundary_expanded['geometry'] = proj_boundary.buffer(10)
-   
+     
             # Get inner and out edges
             outside_edges_proj = proj_edges.overlay(proj_boundary_expanded, how='difference')
             inside_edges_proj = proj_edges[~proj_edges['edge_id'].isin(list(outside_edges_proj['edge_id']))]
 
             # Group linestring with edge_ids
             linestrings_with_attributes = [(linestring, edge_id) for linestring, edge_id in zip(inside_edges_proj.geometry, inside_edges_proj['edge_id'])]
-
             clipped_lines = gpd.clip(inside_edges_proj, proj_boundary)
-        
+
             tolerance = 1
+            
+            inside_edges_proj = inside_edges_proj.copy()
             inside_edges_proj['geometry'] = clipped_lines['geometry'].apply(
                 lambda line: snap(line, proj_boundary.geometry, tolerance)
             )[0]
@@ -3509,21 +3508,45 @@ class Map(ipyleaflet.Map):
             # Create urban plots
             urban_plots = gpd.GeoDataFrame(data={'plot_id': range(len(polygons))}, crs=proj_edges.crs, geometry = polygons)
 
-            print('Computed urban plots')
-            # Associate urban plots with edge ids
-            polygon_features = []
+            # Generate geodataframe of lines and edge_ids
+            urban_lines = gpd.GeoDataFrame(data=[k[1] for k in linestrings_with_attributes], crs = proj_edges.crs, geometry=[k[0] for k in linestrings_with_attributes])
+            urban_lines.columns = ['edge_id', 'geometry']
+            urban_lines['edge_id'] = urban_lines['edge_id'].astype(int)
 
-            for i, polygon in enumerate(polygons):
-                attributes = []
-                
-                for line, attr in linestrings_with_attributes:
-                    if polygon.covers(line):
-                        attributes.append(attr)
-                
-                polygon_features.append(attributes)
-            
+            # 1) Spatial join on 'intersects' (or nearest if you must handle near matches)
+            joined = gpd.sjoin(urban_lines, urban_plots, how='right', predicate='intersects')
+
+            # 2) Compute intersection for each line‐polygon pair
+            urban_plots = urban_plots.rename_geometry("plot_geom")   # so we do not lose it in sjoin
+            joined = gpd.sjoin(urban_lines, urban_plots, how='inner', predicate='intersects')
+
+            # If the default geometry in 'joined' is from urban_lines, we can pull the polygon geometry from matched rows:
+            joined = joined.merge(urban_plots[['plot_id','plot_geom']], on='plot_id', how='left')
+
+            # Compute the intersection as a new column
+            joined['intersection'] = joined.apply(
+                lambda row: row.geometry.intersection(row.plot_geom), 
+                axis=1
+            )
+
+            # 3) Keep only intersections whose geometry is a (Multi)LineString with > 0 length
+            def is_nonpoint_line(geom):
+                return (
+                    geom.geom_type in ['LineString', 'MultiLineString'] 
+                    and geom.length > 0
+                )
+
+            joined = joined[joined['intersection'].apply(is_nonpoint_line)]
+            joined = joined.groupby('plot_id')['edge_id'].unique()
+
+            urban_plots = urban_plots.merge(joined, how='left', on='plot_id')
+            urban_plots = urban_plots.rename(columns={'edge_id':'edge_ids'})
+            # Now 'joined' contains only true line‐polygon overlaps, excluding mere point contacts.
+            # If you need them grouped by polygon:
+
+            print(f'Urban plots constructed. Time taken: {round(time.time() - start)}.')
+
             # Create geodataframe associating each polygon with their own edge ids, filter by minimum size
-            urban_plots['edge_ids'] = polygon_features
             urban_plots['plot_area'] = urban_plots.geometry.area
             urban_plots['plot_perimeter'] = urban_plots.geometry.length
             urban_plots = urban_plots[urban_plots['plot_area'] > minimum_area]
@@ -3613,6 +3636,7 @@ class Map(ipyleaflet.Map):
                 urban_plots = urban_plots.merge(pois_df, on='plot_id', how='left')
                 urban_plots[poi_columns] = urban_plots[poi_columns].fillna(0)
             else:
+                print('Adding poi categories to plots...')
                 # Load poi information 
                 poi_path = pkg_resources.resource_filename('urbanity', "map_data/poi_filter.json")
                 with open(poi_path) as poi_filter:
@@ -3678,6 +3702,7 @@ class Map(ipyleaflet.Map):
                 urban_plots = urban_plots.rename(columns = {'commercial':'Commercial', 'entertainment':'Entertainment','food':'Food','healthcare':'Healthcare','civic':'Civic', 'institutional':'Institutional', 'recreational':'Recreational', 'social':'Social'})
 
             if add_gee_layers:
+                print('Adding earth engine layers to plots...')
                 for i in range(len(add_gee_layers['layers'])):
                     layer = add_gee_layers['layers'][i]
                     method = add_gee_layers['methods'][i]
@@ -3694,10 +3719,11 @@ class Map(ipyleaflet.Map):
 
                     urban_plots = merge_raster_to_gdf(raster_gdf, urban_plots, id_col = 'plot_id', raster_col=layer_name, method=method)
 
-
             if add_lcz:
+                print('Adding local climate zone categories to plots...')
                 try:
                     lcz_array_gdf = gee_layer_from_boundary(self.polygon_bounds, 'RUB/RUBCLIM/LCZ/global_lcz_map/latest', band='', index=0)
+                    lcz_array_gdf.columns = ['lcz', 'geometry']
                 except EEException:
                     ee.Authenticate()
                     ee.Initialize()
@@ -3706,10 +3732,9 @@ class Map(ipyleaflet.Map):
 
                 urban_plots = merge_raster_to_gdf(lcz_array_gdf, urban_plots, id_col = 'plot_id', raster_col='lcz', num_classes = 18, method='proportion')
 
-
             # Add population
             if population_layer == 'meta': 
-                print('Adding population counts to plots...')
+                print('Adding Meta population counts to plots...')
                 long_min, lat_min, long_max, lat_max = self.polygon_bounds.geometry.total_bounds
 
                 pop_subgroups = ['population', 'children', 'youth', 'elderly', 'men', 'women']
@@ -3798,6 +3823,7 @@ class Map(ipyleaflet.Map):
                         urban_plots[name] = urban_plots[name].replace(np.nan, 0).astype(int)
             
             elif population_layer == 'ghs':
+                print('Adding GHS population counts to plots...')
                 # Load global tile dataframe and fine overlapping grid
                 ghs_global_grid_path = pkg_resources.resource_filename('urbanity', 'ghs_data/global_ghs_grid.parquet')
                 ghs_global_grid = gpd.read_parquet(ghs_global_grid_path)
@@ -3903,17 +3929,14 @@ class Map(ipyleaflet.Map):
                 res_intersection = origin_gdf_built.overlay(urban_plots, how='intersection')
                 built_total_df = res_intersection.groupby(['plot_id'])[temporal_built_columns].mean()
                 urban_plots = urban_plots.merge(built_total_df, on='plot_id', how='left')
-            
-            print(f'Population attributes computed. Time taken: {round(time.time() - start)}.')  
 
+            print(f'Population attributes computed. Time taken: {round(time.time() - start)}.')  
 
             urban_plots['geometry'] = urban_plots.make_valid()
 
             urban_plots['plot_id'] = urban_plots.index
 
             self.urban_plots = urban_plots
-
-            print(f'Urban plots constructed. Time taken: {round(time.time() - start)}.')
 
         # Get edge connections
         objects = {}        
