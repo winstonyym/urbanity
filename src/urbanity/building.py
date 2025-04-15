@@ -12,6 +12,8 @@ from pyrosm import get_data
 import pkg_resources
 import numpy as np
 import geopandas as gpd
+from scipy.spatial import cKDTree
+
 from urbanity.geom import fill_and_expand, project_gdf, buffer_polygon
 
 def get_osm_buildings(location = '', fp = '', boundary=None):
@@ -87,25 +89,69 @@ def remove_overlapping_polygons(building):
     building = building.reset_index(drop=True) 
     return building
 
-def building_knn_nearest(gdf, knn=3):
-    """Helper function to generate nearest neighbours and distance for buildings.
+def building_knn_nearest(gdf, knn=3, non_nan_col=None):
+    """
+    Helper function to generate nearest neighbours and distances for each building.
+    Optionally, it excludes buildings that have NaN in `non_nan_col` from being 
+    considered as neighbors.
 
     Args:
-        gdf (gpd.GeoDataFrame): A geopandas GeoDataFrame that consists of buildings footprints.
-        knn (int, optional): Returns the k-th nearest neighbours. Defaults to 3.
+        gdf (gpd.GeoDataFrame): A GeoDataFrame containing building footprints 
+                                and centroids in a column named 'bid_centroid'.
+        knn (int, optional): Number of nearest neighbours to return. Defaults to 3.
+        non_nan_col (str, optional): Name of a column. Buildings with NaN in this
+                                     column are excluded from neighbors. If None,
+                                     use all buildings. Defaults to None.
 
     Returns:
-        gpd.GeoDataFrame: A geopandas GeoDataFrame consisting of buildings and their nearest neighbours.
+        gpd.GeoDataFrame: The original GeoDataFrame with two new columns:
+                          1) `<knn>-nn-idx` with lists of nearest-neighbor indices
+                          2) `<knn>-dist`   with the corresponding distances
     """    
-    from scipy.spatial import cKDTree
-    
-    nA = np.array(list(gdf['bid_centroid'].apply(lambda x: (x.x, x.y))))
-    tree = cKDTree(nA)
-    dd, ii = tree.query(nA, k = list(range(2, knn+2)))
+    # 1. Extract coordinates of ALL buildings
+    coords_all = np.array([
+        (centroid.x, centroid.y) for centroid in gdf['bid_centroid']
+    ])
 
-    gdf[f'{knn}-nn-idx'] = list(ii)
-    gdf[f'{knn}-dist'] = list(dd)
-    
+    # 2. Determine which buildings are *valid* neighbors
+    #    i.e. they do NOT have NaN in `non_nan_col`.
+    if non_nan_col is not None:
+        valid_mask = ~gdf[non_nan_col].isna()
+    else:
+        # If no column is specified, all rows are valid.
+        valid_mask = np.ones(len(gdf), dtype=bool)
+
+    # Get the subset of coordinates (and their indices) that are valid neighbors
+    valid_coords = coords_all[valid_mask]
+    valid_indices = np.where(valid_mask)[0]
+
+    # 3. Build a cKDTree using only the valid neighbors
+    tree = cKDTree(valid_coords)
+
+    # 4. For every building (including those possibly invalid themselves):
+    #    - Query the tree to get the K nearest valid buildings
+    #    - Store distances and the original row indices of these valid neighbors
+    all_distances = []
+    all_indices = []
+    for i, point in enumerate(coords_all):
+        # Query among valid coords only
+        dist, idx = tree.query(point, k=knn)
+        
+        # If knn==1, dist/idx is not an array but a scalar. Convert to array for consistency.
+        if knn == 1:
+            dist = np.array([dist])
+            idx  = np.array([idx])
+        
+        # Convert "valid space" indices back to "global" gdf row indices
+        global_indices = valid_indices[idx]
+
+        all_distances.append(dist)
+        all_indices.append(global_indices)
+
+    # 5. Attach results back to the GeoDataFrame
+    gdf[f'{knn}-nn-idx'] = all_indices
+    gdf[f'{knn}-dist'] = all_distances
+
     return gdf
 
 def compute_knn_aggregate(building_nodes, attr_cols):
@@ -939,35 +985,82 @@ def _calc(geom):
     deviations = [abs(90 - i) for i in angles]
     return np.mean(deviations)
 
-def get_and_assign_building_heights(filepath, building_gdf):
+def get_building_heights(filepath, target_key):
     dest_crs = 'epsg:3857'
 
-    heights = pd.read_parquet(filepath)
+    folder_path = f'./data/'
+    data_path = os.path.join(folder_path, target_key)
 
-    # Example: df has a column 'geom_wkb' with WKB in bytes
-    heights['geometry'] = heights['geometry'].apply(wkb.loads)
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
 
-    heights = gpd.GeoDataFrame(heights, crs='epsg:4326', geometry='geometry')
+    if os.path.exists(data_path):
+        heights = gpd.read_parquet(data_path)
+    else:
+        heights = pd.read_parquet(filepath)
+        # Example: df has a column 'geom_wkb' with WKB in bytes
+        heights['geometry'] = heights['geometry'].apply(wkb.loads)
+        heights = gpd.GeoDataFrame(heights, crs='epsg:4326', geometry='geometry')
+        heights.to_parquet(data_path)
 
+    return heights
+
+def assign_building_heights(heights, building_gdf):
+    dest_crs = 'epsg:3857'
+    
     proj_building_gdf = building_gdf.to_crs(dest_crs)
     proj_heights = heights.to_crs(dest_crs)
     
     # Add area
-    res_intersection = proj_building_gdf.overlay(proj_heights)
-    res_intersection['coverage_area'] = res_intersection.geometry.area
+    res_intersection = proj_heights.overlay(proj_building_gdf)
 
     # Calculate weighted average height per id
-    weighted_heights = res_intersection.groupby('bid').apply(
-        lambda g: np.average(g['Height'], weights=g['coverage_area'])
-    ).reset_index(name='weighted_height')
+    weighted_heights = res_intersection.groupby('bid')[['Height']].mean().reset_index()
 
     proj_building_gdf = proj_building_gdf.merge(weighted_heights, on='bid', how='left')
 
     # # Add building centroid for knn computation
     proj_building_gdf['bid_centroid'] = proj_building_gdf.geometry.centroid
-    proj_building_gdf = building_knn_nearest(proj_building_gdf, knn=1, non_nan_col='weighted_height')
-    proj_building_gdf = compute_knn_aggregate(proj_building_gdf, ['weighted_height'])
+    proj_building_gdf = building_knn_nearest(proj_building_gdf, knn=1, non_nan_col='Height')
+    proj_building_gdf = compute_knn_aggregate(proj_building_gdf, ['Height'])
+    proj_building_gdf = proj_building_gdf.drop(columns = ['Height', '1-nn-idx', '1-dist', '1-nn-idx_Height_stdev'])
+    proj_building_gdf = proj_building_gdf.rename(columns = {'1-nn-idx_Height_mean':'bid_height'})
+    return proj_building_gdf.to_crs('epsg:4326')
 
-    proj_building_gdf = proj_building_gdf.drop(columns = ['weighted_height', 'bid_centroid', '1-nn-idx', '1-dist', '1-nn-idx_weighted_height_stdev'])
-    proj_building_gdf = proj_building_gdf.rename(columns = {'1-nn-idx_weighted_height_mean':'height'})
+def get_and_assign_building_heights(filepath, target_key, building_gdf):
+
+    dest_crs = 'epsg:3857'
+
+    folder_path = f'./data/'
+    data_path = os.path.join(folder_path, target_key)
+
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+    if os.path.exists(data_path):
+        heights = gpd.read_parquet(data_path)
+    else:
+        heights = pd.read_parquet(filepath)
+        # Example: df has a column 'geom_wkb' with WKB in bytes
+        heights['geometry'] = heights['geometry'].apply(wkb.loads)
+        heights = gpd.GeoDataFrame(heights, crs='epsg:4326', geometry='geometry')
+        heights.to_parquet(data_path)
+
+    proj_building_gdf = building_gdf.to_crs(dest_crs)
+    proj_heights = heights.to_crs(dest_crs)
+    
+    # Add area
+    res_intersection = proj_heights.overlay(proj_building_gdf)
+
+    # Calculate weighted average height per id
+    weighted_heights = res_intersection.groupby('bid')[['Height']].mean().reset_index()
+
+    proj_building_gdf = proj_building_gdf.merge(weighted_heights, on='bid', how='left')
+
+    # # Add building centroid for knn computation
+    proj_building_gdf['bid_centroid'] = proj_building_gdf.geometry.centroid
+    proj_building_gdf = building_knn_nearest(proj_building_gdf, knn=1, non_nan_col='Height')
+    proj_building_gdf = compute_knn_aggregate(proj_building_gdf, ['Height'])
+    proj_building_gdf = proj_building_gdf.drop(columns = ['Height', '1-nn-idx', '1-dist', '1-nn-idx_Height_stdev'])
+    proj_building_gdf = proj_building_gdf.rename(columns = {'1-nn-idx_Height_mean':'bid_height'})
     return proj_building_gdf.to_crs('epsg:4326')

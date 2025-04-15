@@ -37,11 +37,7 @@ from pyrosm import get_data
 from scipy.stats import entropy
 
 # import module functions and classes
-from .utils import get_country_centroids, finetune_poi, get_available_precomputed_network_data, most_frequent, get_plot_to_plot_edges, \
-                    get_building_to_street_edges, get_edge_nodes, get_building_to_building_edges, get_intersection_to_street_edges, \
-                    get_buildings_in_plot_edges, get_edges_along_plot, add_super_node, remove_non_numeric_columns_objects, standardise_and_scale, \
-                    fill_na_in_objects, one_hot_encode_categorical, save_to_h5, save_to_npz
-from .visualisation import plot_graph
+from .utils import get_country_centroids, finetune_poi, get_available_precomputed_network_data, most_frequent
 from .geom import *
 from .building import *
 from .population import get_meta_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, load_npz_as_raster, mask_raster_with_gdf, \
@@ -50,6 +46,7 @@ from .topology import compute_centrality, merge_nx_property, merge_nx_attr
 from .satellite import get_and_combine_tiles, get_grid_size, get_tiles_from_bbox, download_satellite_tiles_from_bbox, view_satellite_building_pair, get_max_img_dims, get_building_image_chips, \
                        get_tiles_gdf, download_tiff_from_path, gee_layer_from_boundary, merge_raster_to_gdf
 
+from .data_class import UrbanGraph
 from ee.ee_exception import EEException
 
 # Import country coords
@@ -82,7 +79,6 @@ class Map(ipyleaflet.Map):
         self.urban_plots = None
         self.objects = None
         self.connections = None
-        self.adj_column = None
 
         if os.path.isdir('./data'):
             self.directory = "./data"
@@ -230,10 +226,6 @@ class Map(ipyleaflet.Map):
             print('Polygon bounding layer removed.')
         else:
             print('No polygon layer found on map.')
-
-    def plot_urban_graph(self, node_id=''):
-        deck = plot_graph(self.polygon_bounds, self.objects, self.connections, node_id = node_id)
-        return deck
     
 
     def check_osm_buildings(self,
@@ -3036,10 +3028,6 @@ class Map(ipyleaflet.Map):
             pop_filepath: str = '',
             bandwidth: int = 100,
             minimum_area: int = 30,
-            knn: list = [3],
-            knn_threshold: int = 100,
-            return_neighbours: str = 'distance',
-            distance_threshold: list = [100],
             network_type: str = 'driving',
             add_self_as_super_node: bool = False,
             save_as_h5: bool = False,
@@ -3051,7 +3039,6 @@ class Map(ipyleaflet.Map):
             temporal_years: list = [2025],
             population_layer = 'meta',
             satellite_pixel_padding: int = 128
-
             ) -> [gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Function to generate heterogeneous urban graph. Returns node types as individual geodataframes: 1) urban plots; 2) buildings; 3) streets; 4) intersections.
         Bandwidth (m) can be specified to buffer network, obtaining neighbouring nodes within buffered area of network.
@@ -3067,7 +3054,6 @@ class Map(ipyleaflet.Map):
             minimum_area (int): Specifies minimum plot area to filter small urban plots (e.g. small polygons formed by road intersection).
             knn (list): Specifies the number of neighbours for each building to form building to building edges.
             knn_threshold (int): Specifies the distance (metres) for a building to be considered a neighbour. To simplify computation, distance is measured between building to building centroid.
-            return_neighbours (str): Choose whether to use knn option or distance (knn threshold) to define building neighbours. 
             distance_threshold (list): Specifies the set of buffer distances to search for building neighbours.
             network_type (str): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
             add_self_as_super_node (bool): If True, inserts spatial boundary (as specified in Map object `polygon_bounds` property) as a super node that is connected to other polygon elements (e.g. usually urban plot). Useful for tasks that involve prediction of attributes corresponding to spatial boundary. 
@@ -3281,7 +3267,6 @@ class Map(ipyleaflet.Map):
                 buildings['bid_centroid'] = buildings.geometry.centroid
                 buildings = buildings[['bid', 'bid_area', 'bid_perimeter', 'bid_centroid', 'geometry']]
 
-            
                 # Compute building attributes
                 buildings = compute_circularcompactness(buildings, element='bid')
                 buildings = compute_convexity(buildings, element='bid')
@@ -3303,49 +3288,10 @@ class Map(ipyleaflet.Map):
                 'bid_eri', 'bid_fractaldim', 'bid_rectangularity', 'bid_squareness',
                 'bid_square_compactness', 'bid_shape_idx', 'bid_complexity']
 
-                if return_neighbours == 'knn':
-
-                    def filter_threshold(nn, dist):
-                        return {k:v for k,v in zip(nn, dist) if v <= knn_threshold}
-
-                    # Compute attributes
-                    for i in knn:
-                        buildings = building_knn_nearest(buildings, knn=i)
-                        buildings[f'{i}-nn-threshold'] = buildings.apply(lambda row: filter_threshold(row[f'{i}-nn-idx'], row[f'{i}-dist']), axis=1)
-
-                    buildings = compute_knn_aggregate(buildings, attr_cols)
-                    adj_column = f'{knn[0]}-nn-idx'
-
-                elif return_neighbours == 'distance':
-                    def remove_self(neighbours, bid):
-                        try:
-                            neighbours.remove(bid)
-                            return neighbours
-                        except ValueError:
-                            return neighbours
-                    
-                    for i in distance_threshold:
-                        buffer_gdf = gpd.GeoDataFrame(data={'buffer_id':buildings.index}, crs=buildings.crs, geometry = building_centroids)
-                        buffer_gdf['geometry'] = buffer_gdf.geometry.buffer(i)
-
-                        # Spatial intersection of building
-                        res_intersection = buildings.overlay(buffer_gdf, how='intersection')
-                        buildings[f'{i}_dist_idx'] = res_intersection.groupby(['buffer_id'])['bid'].agg(list)
-                        buildings[f'{i}_dist_idx'] = buildings.apply(lambda row: remove_self(row[f'{i}_dist_idx'], row['bid']), axis=1)
-
-                        # for attr in attr_cols:
-                        #     mean_series = res_intersection.groupby(['buffer_id'])[attr].mean()
-                        #     std_series = res_intersection.groupby(['buffer_id'])[attr].std()
-                        #     df = pd.DataFrame({f'{i}m_{attr}_mean':mean_series.values, f'{i}m_{attr}_stdev':std_series.values})
-                        #     buildings = gpd.GeoDataFrame(pd.concat([buildings,df],axis=1))
-                    
-                    adj_column = f'{distance_threshold[0]}_dist_idx'
-
                 buildings = buildings.to_crs('EPSG:4326')
                 self.buildings = buildings
 
             else: 
-
                 buildings = osm.get_buildings()
 
                 # Process geometry and attributes for Overture buildings
@@ -3379,56 +3325,44 @@ class Map(ipyleaflet.Map):
                 buildings = compute_shape_index(buildings, element='bid')
                 buildings = compute_squareness(buildings, element='bid')
                 buildings = compute_complexity(buildings, element='bid')
+
+                # Compute building heights
+                ghs_global_grid_path = pkg_resources.resource_filename('urbanity', 'ghs_data/global_ghs_grid.parquet')
+                ghs_global_grid = gpd.read_parquet(ghs_global_grid_path)
                 
+                overlapping_grid = ghs_global_grid.overlay(buffered_tp)
+
+                ghs_building_height_path = pkg_resources.resource_filename('urbanity', 'building_height_data/building_grids.json')
+                with open(ghs_building_height_path) as f:
+                    building_height_links = json.load(f)
+
+                # If only one tile
+                if len(overlapping_grid) == 1:
+                    row, col = overlapping_grid['row'].values.item(), overlapping_grid['col'].values.item()
+                    target_key = f"R{row}C{col}.parquet"
+                    buildings = get_and_assign_building_heights(building_height_links[target_key], target_key, buildings)
+
+                elif len(overlapping_grid) > 1: 
+                    building_height_list = []
+                    for i, row in overlapping_grid.iterrows():
+                        row, col = overlapping_grid['row'].values.item(), overlapping_grid['col'].values.item()
+                        target_key = f"R{row}C{col}.parquet"
+                        building_height = get_building_heights(target_key, target_key)
+                        building_height_list.append(building_height)
+                    combined_df = pd.concat(building_height_list)
+                    combined_gdf = gpd.GeoDataFrame(combined_df, crs='epsg:4326', geometry=combined_df['geometry'])
+
+                    buildings = assign_building_heights(combined_gdf, target_key, buildings)
+        
                 # Set computed building data as map attribute
                 attr_cols = ['bid_area', 'bid_perimeter', 'bid_circ_compact', 'bid_convexity',
                 'bid_corners', 'bid_elongation', 'bid_orientation', 'bid_longest_axis_length',
                 'bid_eri', 'bid_fractaldim', 'bid_rectangularity', 'bid_squareness',
                 'bid_square_compactness', 'bid_shape_idx', 'bid_complexity']
 
-                if return_neighbours == 'knn':
-
-                    def filter_threshold(nn, dist):
-                        return {k:v for k,v in zip(nn, dist) if v <= knn_threshold}
-                    
-                    # Compute attributes
-                    for i in knn:
-                        buildings = building_knn_nearest(buildings, knn=i)
-                        buildings[f'{i}-nn-threshold'] = buildings.apply(lambda row: filter_threshold(row[f'{i}-nn-idx'], row[f'{i}-dist']), axis=1)
-
-                    # buildings = compute_knn_aggregate(buildings, attr_cols)
-                    adj_column = f'{knn[0]}-nn-idx'
-
-
-                elif return_neighbours == 'distance':
-                    def remove_self(neighbours, bid):
-                        try:
-                            neighbours.remove(bid)
-                            return neighbours
-                        except ValueError:
-                            return neighbours
-                    
-                    for i in distance_threshold:
-                        buffer_gdf = gpd.GeoDataFrame(data={'buffer_id':buildings.index}, crs=buildings.crs, geometry = building_centroids)
-                        buffer_gdf['geometry'] = buffer_gdf.geometry.buffer(i)
-
-                        # Spatial intersection of building
-                        res_intersection = buildings.overlay(buffer_gdf, how='intersection')
-                        buildings[f'{i}_dist_idx'] = res_intersection.groupby(['buffer_id'])['bid'].agg(list)
-                        buildings[f'{i}_dist_idx'] = buildings.apply(lambda row: remove_self(row[f'{i}_dist_idx'], row['bid']), axis=1)
-
-                        # for attr in attr_cols:
-                        #     mean_series = res_intersection.groupby(['buffer_id'])[attr].mean()
-                        #     std_series = res_intersection.groupby(['buffer_id'])[attr].std()
-                        #     df = pd.DataFrame({f'{i}m_{attr}_mean':mean_series.values, f'{i}m_{attr}_stdev':std_series.values})
-                        #     buildings = gpd.GeoDataFrame(pd.concat([buildings,df],axis=1))
-                    
-                    adj_column = f'{distance_threshold[0]}_dist_idx'
-
                 buildings = buildings.to_crs('EPSG:4326')
-                buildings = buildings.drop(columns=['bid_centroid'])
+                # buildings = buildings.drop(columns=['bid_centroid'])
                 self.buildings = buildings
-                self.adj_column = adj_column
 
             print(f'Buildings constructed. Time taken: {round(time.time() - start)}.')
 
@@ -3541,7 +3475,7 @@ class Map(ipyleaflet.Map):
 
             urban_plots = urban_plots.merge(joined, how='left', on='plot_id')
             urban_plots = urban_plots.rename(columns={'edge_id':'edge_ids'})
-            # Now 'joined' contains only true line‐polygon overlaps, excluding mere point contacts.
+
             # If you need them grouped by polygon:
 
             print(f'Urban plots constructed. Time taken: {round(time.time() - start)}.')
@@ -3584,18 +3518,18 @@ class Map(ipyleaflet.Map):
             urban_plots['bid'] = urban_plots['bid'].fillna(0)
             # urban_plots['plot_building_count'] = urban_plots['index'].apply(lambda x: len(x) if x !=0 else 0)
             
-            attr_cols = ['bid_area', 'bid_perimeter', 'bid_circ_compact', 'bid_convexity', 'bid_corners', 'bid_elongation',
-                         'bid_orientation', 'bid_longest_axis_length', 'bid_eri', 'bid_fractaldim', 
-                         'bid_rectangularity', 'bid_squareness', 'bid_square_compactness', 'bid_shape_idx', 'bid_complexity']
+            # attr_cols = ['bid_area', 'bid_perimeter', 'bid_circ_compact', 'bid_convexity', 'bid_corners', 'bid_elongation',
+            #              'bid_orientation', 'bid_longest_axis_length', 'bid_eri', 'bid_fractaldim', 
+            #              'bid_rectangularity', 'bid_squareness', 'bid_square_compactness', 'bid_shape_idx', 'bid_complexity']
             
-            for attr in attr_cols:
-                urban_plots[f'plot_{attr}_mean'] = building_urban_plots_intersection.groupby('plot_id')[attr].mean()
-                urban_plots[f'plot_{attr}_std'] = building_urban_plots_intersection.groupby('plot_id')[attr].std()
-                urban_plots[f'plot_{attr}_std'] = urban_plots[f'plot_{attr}_std'].replace(np.nan, 0).astype(float)
+            # for attr in attr_cols:
+            #     urban_plots[f'plot_{attr}_mean'] = building_urban_plots_intersection.groupby('plot_id')[attr].mean()
+            #     urban_plots[f'plot_{attr}_std'] = building_urban_plots_intersection.groupby('plot_id')[attr].std()
+            #     urban_plots[f'plot_{attr}_std'] = urban_plots[f'plot_{attr}_std'].replace(np.nan, 0).astype(float)
 
-            # Compute plot level statistics
-            urban_plots['plot_bid_total_area'] = building_urban_plots_intersection.groupby('plot_id')['bid_area'].sum()
-            urban_plots['plot_bid_built_coverage'] = urban_plots['plot_bid_total_area'] / urban_plots['plot_area'] 
+            # # Compute plot level statistics
+            # urban_plots['plot_bid_total_area'] = building_urban_plots_intersection.groupby('plot_id')['bid_area'].sum()
+            # urban_plots['plot_bid_built_coverage'] = urban_plots['plot_bid_total_area'] / urban_plots['plot_area'] 
             
             print('Adding plot morphology to plots...')
             # Compute building attributes
@@ -3939,23 +3873,7 @@ class Map(ipyleaflet.Map):
             self.urban_plots = urban_plots
 
         # Get edge connections
-        objects = {}        
-        connections = {}
-
-        objects['plot'] = self.urban_plots
-        objects['building'] = self.buildings
-        objects['intersection'] = self.network[1]
-        objects['street'] = self.network[2]
-
-        if add_self_as_super_node:
-            objects, connections = add_super_node(objects, connections, self.polygon_bounds, target='plot', name='boundary')
-
-        _, connections['plot_rev_plot']= get_plot_to_plot_edges(self.urban_plots)
-        connections['building_to_street'], connections['street_to_building']  = get_building_to_street_edges(self.network[2], self.buildings)
-        _, connections['building_rev_building'] = get_building_to_building_edges(self.buildings, adj_column=self.adj_column)
-        connections['intersection_to_street'], connections['street_to_intersection'] = get_intersection_to_street_edges(self.network[1], self.network[2])
-        connections['building_to_plot'], connections['plot_to_building'] = get_buildings_in_plot_edges(self.urban_plots, adj_column='bid')
-        connections['street_to_plot'], connections['plot_to_street'] = get_edges_along_plot(self.urban_plots, adj_column='edge_ids')
+        return UrbanGraph(self.polygon_bounds, self.buildings, self.urban_plots, self.network[2], self.network[1])       
 
 
         print("Total elapsed time --- %s seconds ---" % round(time.time() - start))

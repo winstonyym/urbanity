@@ -15,6 +15,7 @@ from ipyleaflet import DrawControl
 from urllib.error import HTTPError
 from collections import Counter
 
+from urbanity.building import building_knn_nearest, compute_knn_aggregate
 
 def get_country_centroids():
     """Utility function to obtain country centroids based on country name.
@@ -161,12 +162,44 @@ def get_gadm(country, city, version = '4.1', max_level = 4, level_drop = 0):
             continue
     
     
-def get_building_to_building_edges(building_nodes, adj_column = '', add_reverse=True):
+def get_building_to_building_edges(buildings, 
+                                   return_neighbours = 'knn', 
+                                   knn: int = 3,
+                                   distance_threshold: int = 100,
+                                   knn_threshold = 100, 
+                                   add_reverse=True):
+    buildings = buildings.to_crs('epsg:3857')
+    if return_neighbours == 'knn':
+        def filter_threshold(nn, dist):
+            return {k:v for k,v in zip(nn, dist) if v <= knn_threshold}
+
+        # Compute attributes
+        buildings = building_knn_nearest(buildings, knn=knn)
+        buildings[f'{knn}-nn-threshold'] = buildings.apply(lambda row: filter_threshold(row[f'{knn}-nn-idx'], row[f'{knn}-dist']), axis=1)
+        adj_column = f'{knn}-nn-idx'
+
+    elif return_neighbours == 'distance':
+        def remove_self(neighbours, bid):
+            try:
+                neighbours.remove(bid)
+                return neighbours
+            except ValueError:
+                return neighbours
+
+        buffer_gdf = gpd.GeoDataFrame(data={'buffer_id':buildings.index}, crs=buildings.crs, geometry = buildings.geometry.centroid)
+        buffer_gdf['geometry'] = buffer_gdf.geometry.buffer(distance_threshold)
+
+        # Spatial intersection of building
+        res_intersection = buildings.overlay(buffer_gdf, how='intersection')
+        buildings[f'{distance_threshold}_dist_idx'] = res_intersection.groupby(['buffer_id'])['bid'].agg(list)
+        buildings[f'{distance_threshold}_dist_idx'] = buildings.apply(lambda row: remove_self(row[f'{distance_threshold}_dist_idx'], row['bid']), axis=1)
+        adj_column = f'{distance_threshold}_dist_idx'
+
     # building_edges = get_building_to_building_edges(building_nodes, adj_column = '3-nn-idx')
     # Prepare edge index. First match with index position then convert to torch tensor. 
     start_list = []
     end_list = []
-    for i, neighbours in enumerate(building_nodes[adj_column]):
+    for i, neighbours in enumerate(buildings[adj_column]):
         for k in neighbours:
             start_list.append(i)
             end_list.append(k)
@@ -208,12 +241,12 @@ def get_intersection_to_street_edges(intersections, streets, add_reverse=True):
     
     return intersection_to_street_edges
 
-def get_buildings_in_plot_edges(urban_plots, adj_column = '', add_reverse=True):
+def get_buildings_in_plot_edges(urban_plots, add_reverse=True):
     # building_in_plot_edges = get_buildings_in_plot_edges(urban_plots, adj_column = 'building_ids')
     # Prepare edge index. First match with index position then convert to torch tensor. 
     start_list = []
     end_list = []
-    for i, neighbours in enumerate(urban_plots[adj_column]):
+    for i, neighbours in enumerate(urban_plots['bid']):
         if neighbours != 0:
             for k in neighbours:
                 start_list.append(i)
@@ -231,15 +264,16 @@ def get_buildings_in_plot_edges(urban_plots, adj_column = '', add_reverse=True):
     
     return building_to_plot_edges
 
-def get_edges_along_plot(urban_plots, adj_column = '', add_reverse=True):
+def get_edges_along_plot(urban_plots, add_reverse=True):
     # edges_along_plot = get_edges_along_plot(urban_plots, adj_column = 'edge_ids')
     # Prepare edge index. First match with index position then convert to torch tensor. 
+
     start_list = []
     end_list = []
-    for i, neighbours in enumerate(urban_plots[adj_column]):
+    for i, neighbours in enumerate(urban_plots['edge_ids']):
         for k in neighbours:
             start_list.append(i)
-            end_list.append(k)
+            end_list.append(int(k))
             
     start_index = np.array(start_list)
     end_index = np.array(end_list)
@@ -566,11 +600,13 @@ def standardise_and_scale(objects):
     return objects
     
 
-def add_super_node(objects, connections, gdf, target = 'plot', name = 'boundary'):
+def boundary_to_plot(plot, add_reverse=True):
     '''Helper function to add super node to graph. Specify target to create links to specific layer'''
-    objects[name] = gdf
-    edge_connections = np.zeros((2, len(objects[target])))
-    edge_connections[0, :] = np.arange(len(objects[target]))
-    connections[f'{target}_to_{name}'] = edge_connections.astype(int)
-
-    return objects, connections
+    boundary_to_plot = np.zeros((2, len(plot)))
+    boundary_to_plot[1, :] = np.arange(len(plot))
+    boundary_to_plot = boundary_to_plot.astype(int)
+    
+    if add_reverse:
+        plot_to_boundary = np.flip(boundary_to_plot, axis=0)
+    
+    return boundary_to_plot, plot_to_boundary
