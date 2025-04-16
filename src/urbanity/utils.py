@@ -168,14 +168,17 @@ def get_building_to_building_edges(buildings,
                                    distance_threshold: int = 100,
                                    knn_threshold = 100, 
                                    add_reverse=True):
-    buildings = buildings.to_crs('epsg:3857')
+    
+    buildings_copy = buildings.copy()
+    buildings_copy = buildings_copy.to_crs('epsg:3857')
+    buildings_copy['bid_centroid'] = buildings_copy.geometry.centroid
     if return_neighbours == 'knn':
         def filter_threshold(nn, dist):
             return {k:v for k,v in zip(nn, dist) if v <= knn_threshold}
 
         # Compute attributes
-        buildings = building_knn_nearest(buildings, knn=knn)
-        buildings[f'{knn}-nn-threshold'] = buildings.apply(lambda row: filter_threshold(row[f'{knn}-nn-idx'], row[f'{knn}-dist']), axis=1)
+        buildings_copy = building_knn_nearest(buildings_copy, knn=knn)
+        buildings_copy[f'{knn}-nn-threshold'] = buildings_copy.apply(lambda row: filter_threshold(row[f'{knn}-nn-idx'], row[f'{knn}-dist']), axis=1)
         adj_column = f'{knn}-nn-idx'
 
     elif return_neighbours == 'distance':
@@ -186,20 +189,20 @@ def get_building_to_building_edges(buildings,
             except ValueError:
                 return neighbours
 
-        buffer_gdf = gpd.GeoDataFrame(data={'buffer_id':buildings.index}, crs=buildings.crs, geometry = buildings.geometry.centroid)
+        buffer_gdf = gpd.GeoDataFrame(data={'buffer_id':buildings_copy.index}, crs=buildings_copy.crs, geometry = buildings_copy.geometry.centroid)
         buffer_gdf['geometry'] = buffer_gdf.geometry.buffer(distance_threshold)
 
         # Spatial intersection of building
-        res_intersection = buildings.overlay(buffer_gdf, how='intersection')
-        buildings[f'{distance_threshold}_dist_idx'] = res_intersection.groupby(['buffer_id'])['bid'].agg(list)
-        buildings[f'{distance_threshold}_dist_idx'] = buildings.apply(lambda row: remove_self(row[f'{distance_threshold}_dist_idx'], row['bid']), axis=1)
+        res_intersection = buildings_copy.overlay(buffer_gdf, how='intersection')
+        buildings_copy[f'{distance_threshold}_dist_idx'] = res_intersection.groupby(['buffer_id'])['bid'].agg(list)
+        buildings_copy[f'{distance_threshold}_dist_idx'] = buildings_copy.apply(lambda row: remove_self(row[f'{distance_threshold}_dist_idx'], row['bid']), axis=1)
         adj_column = f'{distance_threshold}_dist_idx'
 
     # building_edges = get_building_to_building_edges(building_nodes, adj_column = '3-nn-idx')
     # Prepare edge index. First match with index position then convert to torch tensor. 
     start_list = []
     end_list = []
-    for i, neighbours in enumerate(buildings[adj_column]):
+    for i, neighbours in enumerate(buildings_copy[adj_column]):
         for k in neighbours:
             start_list.append(i)
             end_list.append(k)
@@ -478,53 +481,22 @@ def most_frequent(List):
     occurence_count = Counter(List)
     return occurence_count.most_common(1)[0][0]
 
-def save_to_h5(filepath, gdf_dict, array_dict):
 
-    # Save to HDF5 file
-    with h5py.File(filepath, 'w') as f:
+# def load_npz(filepath):
+#     out = np.load(filepath, allow_pickle=True)
+#     objects = {}
+#     connections = {}
 
-        for gdf_key, gdf_data in gdf_dict.items():
-            if isinstance(gdf_data, np.ndarray):
-                f.create_dataset(gdf_key, data=gdf_data)
-            else:
-                # Save geodataframes as tables (convert to CSV or similar format for storage)
-                f.create_dataset(gdf_key, data=gdf_data.to_csv(index=False).encode())
+#     for k,v in out.items():
+#         if '_' in k:
+#             connections[k] = v
+#         else:
+#             objects[k] = v
+#     return objects, connections
 
-        for array_key, array_data in array_dict.items():
-            f.create_dataset(array_key, data=array_data)
-
-def load_npz(filepath):
-    out = np.load(filepath, allow_pickle=True)
-    objects = {}
-    connections = {}
-
-    for k,v in out.items():
-        if '_' in k:
-            connections[k] = v
-        else:
-            objects[k] = v
-    return objects, connections
-
-
-def load_from_h5(filepath):
-    connections = {}
-    objects = {}
-    with h5py.File(filepath, 'r') as f:
-
-        for k in f.keys():
-            if 'to' in k:
-                connections[k] = f[k][:]
-            elif 'rev' in k:
-                new_k = k.replace('rev', 'rev_to')
-                connections[new_k] = f[k][:]
-            else:
-                objects[k] = f[k][:]
-
-    return objects, connections
-
-def save_to_npz(save_filepath, objects, connections):
-    objects.update(connections)
-    np.savez_compressed(save_filepath, **objects)
+# def save_to_npz(save_filepath, objects, connections):
+#     objects.update(connections)
+#     np.savez_compressed(save_filepath, **objects)
         
         
 def fill_na_in_objects(objects):

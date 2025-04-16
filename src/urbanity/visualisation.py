@@ -21,17 +21,20 @@ def get_connected_nodes(connected_nodes, connections, connection_type, node_type
 
     return connected_nodes
 
-def plot_graph(bbox, objects, connections, node_id = ''):
+def plot_graph(objects,
+               connections, 
+               node_id = ''):
 
     # Preprocess layers
     color_map_pastel = ['#fec5bb', '#fcd5ce', '#fae1dd', '#f8edeb', '#e8e8e4', '#d8e2dc', '#ece4db', '#ffe5d9', '#ffd7ba', '#fec89a']
+    color_map_vibrant = ['#f94144', '#f3722c', '#f8961e', '#f9844a', '#f9c74f', '#90be6d', '#43aa8b', '#4d908e', '#577590', '#277da1']
 
     # Obtain colors
-    plot_color = add_gradient_column(objects['plot'], 'plot_id', color_stops=color_map_pastel, categorical=True)
+    plot_color = add_gradient_column(objects['plot'], 'plot_id', color_stops=color_map_vibrant, categorical=True)
 
-    buildings_within = objects['building'].overlay(bbox, how='intersection')
-    streets_within = objects['street'].overlay(bbox, how='intersection')
-    intersection_within = objects['intersection'].overlay(bbox, how='intersection')
+    buildings_within = objects['building'].overlay(objects['boundary'], how='intersection')
+    streets_within = objects['street'].overlay(objects['boundary'], how='intersection')
+    intersection_within = objects['intersection'].overlay(objects['boundary'], how='intersection')
 
     # If chosen node specified
     if node_id != '':
@@ -85,8 +88,7 @@ def plot_graph(bbox, objects, connections, node_id = ''):
         
     else:
         chosen = None
-        centerx, centery = bbox.geometry[0].centroid.x, bbox.geometry[0].centroid.y
-
+        centerx, centery = objects['boundary'].geometry[0].centroid.x, objects['boundary'].geometry[0].centroid.y
 
     plot = pdk.Layer(
         'GeoJsonLayer',
@@ -117,7 +119,7 @@ def plot_graph(bbox, objects, connections, node_id = ''):
         'GeoJsonLayer',
         buildings_within,
         extruded=True,
-        get_elevation="bid_orientation",
+        get_elevation="bid_height",
         get_fill_color="[166, 167, 170, 255]",  # RGBA color
         get_line_color='[166, 167, 170, 255]'
     )
@@ -138,7 +140,6 @@ def plot_graph(bbox, objects, connections, node_id = ''):
     else:
         deck = pdk.Deck(layers=[plot, buildings, intersections, streets, chosen], initial_view_state=view_state, map_provider='carto', map_style='dark_all')
  
-
     return deck
 
 def hex_to_rgb(hex_color: str):

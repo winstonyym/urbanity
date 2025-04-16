@@ -1023,7 +1023,7 @@ def assign_building_heights(heights, building_gdf):
     proj_building_gdf['bid_centroid'] = proj_building_gdf.geometry.centroid
     proj_building_gdf = building_knn_nearest(proj_building_gdf, knn=1, non_nan_col='Height')
     proj_building_gdf = compute_knn_aggregate(proj_building_gdf, ['Height'])
-    proj_building_gdf = proj_building_gdf.drop(columns = ['Height', '1-nn-idx', '1-dist', '1-nn-idx_Height_stdev'])
+    proj_building_gdf = proj_building_gdf.drop(columns = ['Height', 'bid_centroid', '1-nn-idx', '1-dist', '1-nn-idx_Height_stdev'])
     proj_building_gdf = proj_building_gdf.rename(columns = {'1-nn-idx_Height_mean':'bid_height'})
     return proj_building_gdf.to_crs('epsg:4326')
 
@@ -1061,6 +1061,6 @@ def get_and_assign_building_heights(filepath, target_key, building_gdf):
     proj_building_gdf['bid_centroid'] = proj_building_gdf.geometry.centroid
     proj_building_gdf = building_knn_nearest(proj_building_gdf, knn=1, non_nan_col='Height')
     proj_building_gdf = compute_knn_aggregate(proj_building_gdf, ['Height'])
-    proj_building_gdf = proj_building_gdf.drop(columns = ['Height', '1-nn-idx', '1-dist', '1-nn-idx_Height_stdev'])
+    proj_building_gdf = proj_building_gdf.drop(columns = ['Height', 'bid_centroid','1-nn-idx', '1-dist', '1-nn-idx_Height_stdev'])
     proj_building_gdf = proj_building_gdf.rename(columns = {'1-nn-idx_Height_mean':'bid_height'})
     return proj_building_gdf.to_crs('epsg:4326')

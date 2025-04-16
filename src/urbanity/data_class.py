@@ -6,11 +6,12 @@ import h5py
 import pickle
 from .utils import get_plot_to_plot_edges, get_building_to_street_edges, get_edge_nodes, get_building_to_building_edges, \
                    get_intersection_to_street_edges, get_buildings_in_plot_edges, get_edges_along_plot, boundary_to_plot, \
-                   remove_non_numeric_columns_objects, standardise_and_scale, fill_na_in_objects, one_hot_encode_categorical, \
-                   save_to_h5, save_to_npz
-
+                   remove_non_numeric_columns_objects, standardise_and_scale, fill_na_in_objects, one_hot_encode_categorical
+from typing import Dict
 from .visualisation import plot_graph
 
+import zipfile
+import io
 
 @dataclass
 class UrbanGraph:
@@ -20,7 +21,6 @@ class UrbanGraph:
     street: gpd.GeoDataFrame = field(default_factory=lambda: gpd.GeoDataFrame())
     intersection: gpd.GeoDataFrame = field(default_factory=lambda: gpd.GeoDataFrame())
 
-    # Edges
     boundary_to_plot: np.ndarray = None
     plot_to_boundary: np.ndarray = None
     plot_to_plot: np.ndarray = None
@@ -34,13 +34,13 @@ class UrbanGraph:
     street_to_plot: np.ndarray = None
     plot_to_street: np.ndarray = None
 
-    def __repr__(self) -> str:
-        """
-        Return a string representation of the UrbanGraph, summarizing each property.
-        """
-        # You could store them in separate dictionaries if you like:
-        # For demonstration, we'll create them on the fly:
-        geo_store = {
+    # We'll defer populating these until after the instance is created:
+    geo_store: Dict = field(default_factory=dict, init=False)
+    edge_store: Dict = field(default_factory=dict, init=False)
+
+    def __post_init__(self):
+        """Called automatically after dataclass __init__ to populate geo_store and edge_store."""
+        self.geo_store = {
             'boundary': self.boundary,
             'building': self.building,
             'plot': self.plot,
@@ -48,13 +48,11 @@ class UrbanGraph:
             'intersection': self.intersection
         }
 
-        edge_store = {
+        self.edge_store = {
             'boundary_to_plot': self.boundary_to_plot,
             'plot_to_boundary': self.plot_to_boundary,
             'plot_to_plot': self.plot_to_plot,
             'building_to_building': self.building_to_building,
-            'plot_to_street': self.plot_to_street,
-            'street_to_plot': self.street_to_plot,
             'building_to_street': self.building_to_street,
             'street_to_building': self.street_to_building,
             'intersection_to_street': self.intersection_to_street,
@@ -65,9 +63,14 @@ class UrbanGraph:
             'plot_to_street': self.plot_to_street
         }
 
+    def __repr__(self) -> str:
+        """
+        Return a string representation of the UrbanGraph, summarizing each property.
+        """
+
         # Build strings for each
-        info1 = [self.size_repr(k, v, 2) for k, v in geo_store.items()]
-        info2 = [self.size_repr(k, v, 2) for k, v in edge_store.items()]
+        info1 = [self.size_repr(k, v, 2) for k, v in self.geo_store.items()]
+        info2 = [self.size_repr(k, v, 2) for k, v in self.edge_store.items()]
 
         info = ',\n'.join(info1 + info2)
         # Optionally add line breaks if not empty
@@ -93,68 +96,126 @@ class UrbanGraph:
             # Fallback for other types
             return f"{prefix}{name}: {type(data).__name__}"
         
-    def initialize_edges(self, return_neighbours = 'knn', knn=5, threshold=100):
-        _, self.plot_to_plot = get_plot_to_plot_edges(self.plot)
-        _, self.building_to_building = get_building_to_building_edges(self.building, 
-                                                                      return_neighbours = return_neighbours,
-                                                                      knn = knn,
-                                                                      distance_threshold = threshold,
-                                                                      knn_threshold = threshold, 
-                                                                      add_reverse=True)
-        
-        self.boundary_to_plot, self.plot_to_boundary = boundary_to_plot(self.plot)
-        self.street_to_plot, self.plot_to_street = get_edges_along_plot(self.plot)
-        self.building_to_street, self.street_to_building = get_building_to_street_edges(self.street, self.building)
-        self.intersection_to_street, self.street_to_intersection = get_intersection_to_street_edges(self.intersection, self.street)
-        self.building_to_plot, self.plot_to_building = get_buildings_in_plot_edges(self.plot)
-        self.street_to_plot, self.plot_to_street = get_edges_along_plot(self.plot)
+    def initialize_edges(self, building_neighbours = 'knn', knn=5, distance=100):
+
+        if self.boundary_to_plot is None: 
+            _, self.plot_to_plot = get_plot_to_plot_edges(self.plot)
+            _, self.building_to_building = get_building_to_building_edges(self.building, 
+                                                                        return_neighbours = building_neighbours,
+                                                                        knn = knn,
+                                                                        distance_threshold = distance,
+                                                                        knn_threshold = distance, 
+                                                                        add_reverse=True)
+            
+            self.boundary_to_plot, self.plot_to_boundary = boundary_to_plot(self.plot)
+            self.street_to_plot, self.plot_to_street = get_edges_along_plot(self.plot)
+            self.building_to_street, self.street_to_building = get_building_to_street_edges(self.street, self.building)
+            self.intersection_to_street, self.street_to_intersection = get_intersection_to_street_edges(self.intersection, self.street)
+            self.building_to_plot, self.plot_to_building = get_buildings_in_plot_edges(self.plot)
+            self.street_to_plot, self.plot_to_street = get_edges_along_plot(self.plot)
+
+            self.geo_store = {
+                'boundary': self.boundary,
+                'building': self.building,
+                'plot': self.plot,
+                'street': self.street,
+                'intersection': self.intersection
+            }
+
+            self.edge_store = {
+                'boundary_to_plot': self.boundary_to_plot,
+                'plot_to_boundary': self.plot_to_boundary,
+                'plot_to_plot': self.plot_to_plot,
+                'building_to_building': self.building_to_building,
+                'building_to_street': self.building_to_street,
+                'street_to_building': self.street_to_building,
+                'intersection_to_street': self.intersection_to_street,
+                'street_to_intersection': self.street_to_intersection,
+                'building_to_plot': self.building_to_plot,
+                'plot_to_building': self.plot_to_building,
+                'street_to_plot': self.street_to_plot,
+                'plot_to_street': self.plot_to_street
+            }
+
+            # Process for downstream tasks
+            self.geo_store = remove_non_numeric_columns_objects(self.geo_store, keep_geometry=True)
+        else:
+            print('Graph edges already initialized.')
 
     # Any additional methods (including __repr__) go here
     def plot_urban_graph(self, node_id=''):
-        deck = plot_graph(node_id = node_id)
-        return deck
+        graph_viz = plot_graph(self.geo_store, self.edge_store, node_id = node_id)
+        return graph_viz
+        
     
-    def save_to_h5(self, filepath: str):
-        """
-        Use the provided `save_to_h5` function to store the UrbanGraph data.
-        """
-        # We'll split the data into two dicts: one for GDFs, one for arrays
-        gdf_dict = {
-            'building': self.building,
-            'plot': self.plot,
-            'street': self.street,
-            'intersection': self.intersection
-        }
-        array_dict = {
-            'building_plot_edges': self.building_plot_edges,
-            'building_street_edges': self.building_street_edges,
-            'building_intersection_edges': self.building_intersection_edges,
-            'plot_street_edges': self.plot_street_edges,
-            'plot_intersection_edges': self.plot_intersection_edges,
-            'street_intersection_edges': self.street_intersection_edges
-        }
+    def save_graph(self, filename):
+        with zipfile.ZipFile(filename, 'w') as z:
+            # Save each GeoDataFrame as a GeoParquet file inside the zip
+            for name, gdf in self.geo_store.items():
+                parquet_name = f"{name}.parquet"
+                gdf.to_parquet(parquet_name)
+                z.write(parquet_name, arcname=parquet_name)
+                # cleanup the temporary parquet file if needed
 
-        save_to_h5(filepath, gdf_dict, array_dict)
+            # Save each numpy array
+            for name, arr in self.edge_store.items():
+                npy_name = f"{name}.npy"
+                np.save(npy_name, arr)
+                z.write(npy_name, arcname=npy_name)
+                # cleanup the temporary numpy file if needed
 
-    @classmethod
-    def load_from_h5(cls, filepath: str):
+    def load_graph(self, filename):
         """
-        Use the companion `load_from_h5` function to retrieve the data 
-        and instantiate an UrbanGraph.
+        Reads each .parquet and .npy file in the zip, storing them in two dictionaries.
+        Returns:
+            geodf_dict: dict of {filename_without_ext: GeoDataFrame}
+            array_dict: dict of {filename_without_ext: numpy.ndarray}
         """
-        gdf_dict, array_dict = load_from_h5(filepath)
-        return cls(
-            building=gdf_dict.get('building', None),
-            plot=gdf_dict.get('plot', None),
-            street=gdf_dict.get('street', None),
-            intersection=gdf_dict.get('intersection', None),
-            building_plot_edges=array_dict.get('building_plot_edges', None),
-            building_street_edges=array_dict.get('building_street_edges', None),
-            building_intersection_edges=array_dict.get('building_intersection_edges', None),
-            plot_street_edges=array_dict.get('plot_street_edges', None),
-            plot_intersection_edges=array_dict.get('plot_intersection_edges', None),
-            street_intersection_edges=array_dict.get('street_intersection_edges', None)
-        )
+        geodf_dict = {}
+        array_dict = {}
+        
+        with zipfile.ZipFile(filename, 'r') as z:
+            # List all files in the ZIP archive
+            for file in z.namelist():
+                # If it's a GeoDataFrame in Parquet format
+                if file.endswith('.parquet'):
+                    with z.open(file) as f:
+                        gdf = gpd.read_parquet(f)
+                    # Use the filename (minus extension) as the dictionary key
+                    dict_key = file.rsplit('.', 1)[0]
+                    geodf_dict[dict_key] = gdf
+
+                # If it's a NumPy array
+                elif file.endswith('.npy'):
+                    with z.open(file) as f:
+                        # Read the data into memory as bytes, then np.load from that
+                        data = io.BytesIO(f.read())
+                        arr = np.load(data, allow_pickle=True)
+                    dict_key = file.rsplit('.', 1)[0]
+                    array_dict[dict_key] = arr
+
+        self.boundary = geodf_dict.get('boundary', None)
+        self.building = geodf_dict.get('building', None)
+        self.plot = geodf_dict.get('plot', None)
+        self.street = geodf_dict.get('street', None)
+        self.intersection = geodf_dict.get('intersection', None)
+
+        self.boundary_to_plot = array_dict.get('boundary_to_plot', None)
+        self.plot_to_boundary = array_dict.get('plot_to_boundary', None)
+        self.plot_to_plot = array_dict.get('plot_to_plot', None)
+        self.building_to_building = array_dict.get('building_to_building', None)
+        self.building_to_street = array_dict.get('building_to_street', None)
+        self.street_to_building = array_dict.get('street_to_building', None)
+        self.intersection_to_street = array_dict.get('intersection_to_street', None)
+        self.street_to_intersection = array_dict.get('street_to_intersection', None)
+        self.building_to_plot = array_dict.get('building_to_plot', None)
+        self.plot_to_building = array_dict.get('plot_to_building', None)
+        self.street_to_plot = array_dict.get('street_to_plot', None)
+        self.plot_to_street = array_dict.get('plot_to_street', None)
+
+        # Optionally re-store them:
+        self.geo_store = geodf_dict if geodf_dict else None
+        self.edge_store = array_dict if array_dict else None
 
     def generate_masks(self, df_length: int,
                        train_ratio: float = 0.6,
@@ -251,68 +312,3 @@ class UrbanGraph:
     def to_dgl():
         pass
     
-    def save_to_h5(self, filename: str):
-        """
-        Save the UrbanGraph to an HDF5 file. This method uses 'pickle' to store
-        each GeoDataFrame (including geometry) and each edges array. If your data
-        are large, you might want a more specialized approach.
-        """
-        with h5py.File(filename, 'w') as hf:
-            # Store each GeoDataFrame as a pickled byte string
-            building_pickled = pickle.dumps(self.building)
-            plot_pickled = pickle.dumps(self.plot)
-            street_pickled = pickle.dumps(self.street)
-            intersection_pickled = pickle.dumps(self.intersection)
-
-            hf.create_dataset('building', data=np.void(building_pickled))
-            hf.create_dataset('plot', data=np.void(plot_pickled))
-            hf.create_dataset('street', data=np.void(street_pickled))
-            hf.create_dataset('intersection', data=np.void(intersection_pickled))
-
-            # Store each edge array if present
-            if self.building_plot_edges is not None:
-                hf.create_dataset('building_plot_edges', data=self.building_plot_edges)
-            if self.building_street_edges is not None:
-                hf.create_dataset('building_street_edges', data=self.building_street_edges)
-            if self.building_intersection_edges is not None:
-                hf.create_dataset('building_intersection_edges', data=self.building_intersection_edges)
-            if self.plot_street_edges is not None:
-                hf.create_dataset('plot_street_edges', data=self.plot_street_edges)
-            if self.plot_intersection_edges is not None:
-                hf.create_dataset('plot_intersection_edges', data=self.plot_intersection_edges)
-            if self.street_intersection_edges is not None:
-                hf.create_dataset('street_intersection_edges', data=self.street_intersection_edges)
-
-    @classmethod
-    def load_from_h5(cls, filename: str):
-        """
-        Load an UrbanGraph instance from an HDF5 file previously saved by 'save_to_h5'.
-        """
-        with h5py.File(filename, 'r') as hf:
-            # Unpickle each GeoDataFrame
-            building = pickle.loads(hf['building'][()].tobytes())
-            plot = pickle.loads(hf['plot'][()].tobytes())
-            street = pickle.loads(hf['street'][()].tobytes())
-            intersection = pickle.loads(hf['intersection'][()].tobytes())
-
-            # Retrieve edge arrays if present in the file
-            def _get_if_exists(h5_file, dataset_name):
-                return h5_file[dataset_name][()] if dataset_name in h5_file else None
-
-            building_plot_edges = _get_if_exists(hf, 'building_plot_edges')
-            building_street_edges = _get_if_exists(hf, 'building_street_edges')
-            building_intersection_edges = _get_if_exists(hf, 'building_intersection_edges')
-            plot_street_edges = _get_if_exists(hf, 'plot_street_edges')
-            plot_intersection_edges = _get_if_exists(hf, 'plot_intersection_edges')
-            street_intersection_edges = _get_if_exists(hf, 'street_intersection_edges')
-
-        return cls(building=building,
-                   plot=plot,
-                   street=street,
-                   intersection=intersection,
-                   building_plot_edges=building_plot_edges,
-                   building_street_edges=building_street_edges,
-                   building_intersection_edges=building_intersection_edges,
-                   plot_street_edges=plot_street_edges,
-                   plot_intersection_edges=plot_intersection_edges,
-                   street_intersection_edges=street_intersection_edges)

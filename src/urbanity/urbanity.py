@@ -3029,7 +3029,6 @@ class Map(ipyleaflet.Map):
             bandwidth: int = 100,
             minimum_area: int = 30,
             network_type: str = 'driving',
-            add_self_as_super_node: bool = False,
             save_as_h5: bool = False,
             save_as_npz: bool = False,
             save_filepath: str = '',
@@ -3354,13 +3353,6 @@ class Map(ipyleaflet.Map):
 
                     buildings = assign_building_heights(combined_gdf, target_key, buildings)
         
-                # Set computed building data as map attribute
-                attr_cols = ['bid_area', 'bid_perimeter', 'bid_circ_compact', 'bid_convexity',
-                'bid_corners', 'bid_elongation', 'bid_orientation', 'bid_longest_axis_length',
-                'bid_eri', 'bid_fractaldim', 'bid_rectangularity', 'bid_squareness',
-                'bid_square_compactness', 'bid_shape_idx', 'bid_complexity']
-
-                buildings = buildings.to_crs('EPSG:4326')
                 # buildings = buildings.drop(columns=['bid_centroid'])
                 self.buildings = buildings
 
@@ -3510,7 +3502,7 @@ class Map(ipyleaflet.Map):
                 urban_plots = urban_plots.merge(canopy_df, on='plot_id', how='left')
                 urban_plots[canopy_vars] = urban_plots[canopy_vars].fillna(0)
 
-            print('Adding building morphology to plots...')
+            print('Adding morphology to plots...')
             # Add building id to plot
             buildings = buildings.reset_index()
             building_urban_plots_intersection = buildings.overlay(urban_plots)
