@@ -267,6 +267,27 @@ def get_buildings_in_plot_edges(urban_plots, add_reverse=True):
     
     return building_to_plot_edges
 
+def gdf_to_poly(gdf, poly_path, column = 'boundary_id'):
+    # Load GeoJSON file
+    with open(poly_path, 'w') as poly_file:
+        for idx, row in gdf.iterrows():
+            # Write polygon header
+            poly_file.write(f"{row[column]}\n")  # Assuming each row has a unique 'id'
+            geom = row.geometry
+            if geom.type == 'Polygon':
+                coords = geom.exterior.coords
+                for coord in coords:
+                    poly_file.write(f"  {coord[0]} {coord[1]}\n")
+                poly_file.write("END\n")
+            elif geom.type == 'MultiPolygon':
+                for poly in geom:
+                    coords = poly.exterior.coords
+                    for coord in coords:
+                        poly_file.write(f"  {coord[0]} {coord[1]}\n")
+                    poly_file.write("END\n")
+        # Write footer
+        poly_file.write("END\n")
+
 def get_edges_along_plot(urban_plots, add_reverse=True):
     # edges_along_plot = get_edges_along_plot(urban_plots, adj_column = 'edge_ids')
     # Prepare edge index. First match with index position then convert to torch tensor. 

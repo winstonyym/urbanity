@@ -94,8 +94,8 @@ def plot_graph(objects,
         'GeoJsonLayer',
         plot_color,
         opacity=1,
-        get_fill_color='color',  # RGBA color
-        get_line_color='color',  # Border color
+        get_fill_color='[46, 64, 82, 255]',  # RGBA color
+        get_line_color='[46, 64, 82, 255]',  # Border color
         line_width_min_pixels=2,
     )
 
@@ -103,16 +103,16 @@ def plot_graph(objects,
     streets = pdk.Layer(
         'GeoJsonLayer',
         streets_within,
-        get_line_color='[33, 47, 69, 255]', # Line color (RGB)
-        line_width_min_pixels=1,
+        get_line_color='[255, 255, 255, 255]', # Line color (RGB)
+        line_width_min_pixels=3,
     )
 
     intersections = pdk.Layer(
         "ScatterplotLayer",
         intersection_within,
         get_position='[x, y]',
-        get_fill_color="[75, 75, 76, 255]",  # RGBA color for points
-        get_radius=5,
+        get_fill_color="[255, 255, 255, 255]",  # RGBA color for points
+        get_radius=4,
     )
 
     buildings = pdk.Layer(
@@ -120,8 +120,8 @@ def plot_graph(objects,
         buildings_within,
         extruded=True,
         get_elevation="bid_height",
-        get_fill_color="[166, 167, 170, 255]",  # RGBA color
-        get_line_color='[166, 167, 170, 255]'
+        get_fill_color="[245, 244, 244, 255]",  # RGBA color
+        get_line_color='[225, 229, 242, 255]'
     )
 
     # Define the view

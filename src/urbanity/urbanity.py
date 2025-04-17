@@ -18,6 +18,7 @@ import time
 import math
 import glob
 import requests
+import subprocess
 from unittest import skip
 import pkg_resources
 from webbrowser import get
@@ -37,7 +38,7 @@ from pyrosm import get_data
 from scipy.stats import entropy
 
 # import module functions and classes
-from .utils import get_country_centroids, finetune_poi, get_available_precomputed_network_data, most_frequent
+from .utils import get_country_centroids, finetune_poi, get_available_precomputed_network_data, most_frequent, gdf_to_poly
 from .geom import *
 from .building import *
 from .population import get_meta_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, load_npz_as_raster, mask_raster_with_gdf, \
@@ -3112,7 +3113,33 @@ class Map(ipyleaflet.Map):
                 raise Exception('Please delimit a bounding box.')
             
             # Obtain nodes and edges within buffered polygon
-            osm = pyrosm.OSM(network_filepath, bounding_box=buffered_bbox)
+            data_root = './data/'
+            if not os.path.exists(data_root):
+                os.makedirs(data_root)
+
+            poly_path = os.path.join(data_root, 'temp.poly')
+            osm_path = os.path.join(data_root, 'temp.osm.pbf')
+
+            if os.path.isfile(poly_path):
+                os.remove(poly_path)
+
+            if os.path.isfile(osm_path):
+                os.remove(osm_path)
+
+            self.polygon_bounds = self.polygon_bounds.reset_index()
+            self.polygon_bounds.columns = ['boundary_id', 'geometry']
+
+            gdf_to_poly(self.polygon_bounds, poly_path, column='boundary_id')
+            cmd = [
+                    "osmium", "extract", 
+                    "-p", poly_path,
+                    network_filepath,
+                    "-o", osm_path
+                ]
+
+            subprocess.run(cmd, capture_output=False, text=True)
+
+            osm = pyrosm.OSM(osm_path, bounding_box=buffered_bbox)
             
             nodes, edges = osm.get_network(network_type=network_type, nodes=True)
 

@@ -40,6 +40,7 @@ setup_conda_env() {
     mamba install -c conda-forge -y geemap
     
     # SVI workflow
+    python -m pip install osmium
     python -m pip install torch torchvision
     python -m pip install transformers
     python -m pip install vt2geojson
