@@ -3193,6 +3193,7 @@ class Map(ipyleaflet.Map):
             edges['edge_id'] = edges.index
             edges = edges[['edge_id', 'u', 'v', 'length','geometry']]
 
+            edges =  drop_duplicate_lines(edges)
 
             # Add network attributes
             proj_nodes = project_gdf(nodes)

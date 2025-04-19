@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 import math
 from shapely.geometry import box
-from shapely import wkt
+from shapely import wkt, normalize
 from geopandas import GeoDataFrame
 import mercantile
 
@@ -658,3 +658,30 @@ def wkt_to_gpd(df):
     return gdf
 
 
+def drop_duplicate_lines(gdf: gpd.GeoDataFrame, *, ignore_direction: bool = True) -> gpd.GeoDataFrame:
+    """
+    Return gdf with duplicate linestrings removed.
+    
+    Parameters
+    ----------
+    gdf : GeoDataFrame
+        Must have a LineString geometry column.
+    ignore_direction : bool, default True
+    """
+
+    geom_norm = gdf.geometry.apply(normalize if ignore_direction else (lambda g: g))
+
+    # ── 2. Hash the canonical geometries for fast duplicate detection ───────────
+    gdf["_hash"] = geom_norm.apply(lambda g: g.wkb)   # bytes → perfect hash key
+
+    # ── 3. Drop duplicates on the hash  ─────────────────────────────────────────
+    gdf_unique = (
+        gdf
+        .drop_duplicates("_hash")      # keep first occurrence
+        .drop(columns="_hash")         # housekeeping
+        .set_geometry(gdf.geometry.name, inplace=False)  # keep correct geom dtype
+        .reset_index(drop=True)
+    )
+    gdf_unique['street_id'] = range(len(gdf_unique))
+
+    return gdf_unique

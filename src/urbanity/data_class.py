@@ -9,6 +9,7 @@ from .utils import get_plot_to_plot_edges, get_building_to_street_edges, get_edg
                    remove_non_numeric_columns_objects, standardise_and_scale, fill_na_in_objects, one_hot_encode_categorical
 from typing import Dict
 from .visualisation import plot_graph
+from torch_geometric.data import HeteroData
 
 import zipfile
 import io
@@ -143,11 +144,14 @@ class UrbanGraph:
             print('Graph edges already initialized.')
 
     # Any additional methods (including __repr__) go here
-    def plot_urban_graph(self, node_id=''):
-        graph_viz = plot_graph(self.geo_store, self.edge_store, node_id = node_id)
-        return graph_viz
+    def plot_urban_graph(self, node_type="", colname="", node_id=""):
+        graph_viz = plot_graph(self.geo_store, 
+                               self.edge_store, 
+                               node_type=node_type,
+                               colname=colname,
+                               node_id=node_id,
+                               categorical=False)
         
-    
     def save_graph(self, filename):
         with zipfile.ZipFile(filename, 'w') as z:
             # Save each GeoDataFrame as a GeoParquet file inside the zip
@@ -306,7 +310,7 @@ class UrbanGraph:
                                    test_ratio,
                                    random_state)
 
-    def to_pyg():
+    def to_pyg_graph():
         pass
 
     def to_dgl():
