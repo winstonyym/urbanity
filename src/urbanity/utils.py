@@ -229,7 +229,7 @@ def get_intersection_to_street_edges(intersections, streets, add_reverse=True):
         node_to_id[node] = i
 
     start_node = [node_to_id[i] for i in streets['u'].values] + [node_to_id[i] for i in streets['v'].values]
-    end_node = list(streets['edge_id'].values) + list(streets['edge_id'].values)
+    end_node = list(streets['street_id'].values) + list(streets['street_id'].values)
 
     start_index = np.array(start_node)
     end_index = np.array(end_node)
@@ -267,26 +267,48 @@ def get_buildings_in_plot_edges(urban_plots, add_reverse=True):
     
     return building_to_plot_edges
 
-def gdf_to_poly(gdf, poly_path, column = 'boundary_id'):
-    # Load GeoJSON file
-    with open(poly_path, 'w') as poly_file:
-        for idx, row in gdf.iterrows():
-            # Write polygon header
-            poly_file.write(f"{row[column]}\n")  # Assuming each row has a unique 'id'
+def gdf_to_poly(gdf, poly_path, column: str = "boundary_id"):
+    """
+    Write a GeoDataFrame of Polygon / MultiPolygon geometries to a .poly file.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        Must contain only Polygon or MultiPolygon geometries.
+    poly_path : str | PathLike
+        Output file path.
+    column : str, default "boundary_id"
+        Attribute whose value will be written as the header for each geometry.
+    """
+    with open(poly_path, "w") as poly_file:
+
+        for _, row in gdf.iterrows():
+            poly_file.write(f"{row[column]}\n")        # header
             geom = row.geometry
-            if geom.type == 'Polygon':
-                coords = geom.exterior.coords
-                for coord in coords:
-                    poly_file.write(f"  {coord[0]} {coord[1]}\n")
-                poly_file.write("END\n")
-            elif geom.type == 'MultiPolygon':
-                for poly in geom:
-                    coords = poly.exterior.coords
-                    for coord in coords:
-                        poly_file.write(f"  {coord[0]} {coord[1]}\n")
-                    poly_file.write("END\n")
-        # Write footer
-        poly_file.write("END\n")
+
+            # --- collect all exterior/interior rings in one list -----------
+            rings = []
+
+            if geom.geom_type == "Polygon":
+                rings.append(geom.exterior)
+                rings.extend(geom.interiors)
+
+            elif geom.geom_type == "MultiPolygon":
+                # Shapely ≥2.0: iterate via `.geoms`
+                for poly in geom.geoms:                 # each poly is a Polygon
+                    rings.append(poly.exterior)
+                    rings.extend(poly.interiors)
+
+            else:
+                raise ValueError(f"Unsupported geometry type: {geom.geom_type}")
+
+            # --- write coordinates for every ring --------------------------
+            for ring in rings:
+                for x, y in ring.coords:
+                    poly_file.write(f"  {x} {y}\n")
+                poly_file.write("END\n")                # end of ring/part
+
+        poly_file.write("END\n")         
 
 def get_edges_along_plot(urban_plots, add_reverse=True):
     # edges_along_plot = get_edges_along_plot(urban_plots, adj_column = 'edge_ids')
@@ -294,10 +316,11 @@ def get_edges_along_plot(urban_plots, add_reverse=True):
 
     start_list = []
     end_list = []
-    for i, neighbours in enumerate(urban_plots['edge_ids']):
-        for k in neighbours:
-            start_list.append(i)
-            end_list.append(int(k))
+    for i, neighbours in enumerate(urban_plots['street_id']):
+        if isinstance(neighbours, np.ndarray):
+            for k in neighbours:
+                start_list.append(i)
+                end_list.append(int(k))
             
     start_index = np.array(start_list)
     end_index = np.array(end_list)
@@ -320,11 +343,11 @@ def get_plot_to_plot_edges(urban_plots, add_reverse=True):
     Returns:
         np.array: A (2, N) array where the first row corresponds to urban plots and the second row corresponds to adjacent urban plots that are connected by the same street. N is the number of edges between all urban plots in the network. 
     """    
-    urban_plots_edges = urban_plots.explode('edge_ids')
+    urban_plots_edges = urban_plots.explode('street_id')
 
     neighbors_df = urban_plots_edges.merge(
                     urban_plots_edges, 
-                    on='edge_ids', 
+                    on='street_id', 
                     suffixes=('', '_right')
                     )
     
@@ -398,7 +421,7 @@ def get_building_to_street_edges(streets, building_nodes, add_reverse=True):
     
     # Find nearest building to street
     edge_intersection = gpd.sjoin_nearest(building_nodes_copy, proj_edge, how='inner', max_distance=50, distance_col = 'building_edges')
-    edge_to_building = edge_intersection.groupby(['edge_id'])[['b_index']].aggregate(lambda x: list(x))
+    edge_to_building = edge_intersection.groupby(['street_id'])[['b_index']].aggregate(lambda x: list(x))
 
     start_list = []
     end_list = []
@@ -432,7 +455,7 @@ def get_edge_nodes(edges) -> [gpd.GeoDataFrame, gpd.GeoDataFrame]:
     proj_edges = project_gdf(edges)
     
     # Set edge_id as string and create placeholder lists
-    proj_edges['edge_id'] = proj_edges['edge_id'].astype(str)
+    proj_edges['street_id'] = proj_edges['street_id'].astype(str)
     x_list = []
     y_list = []
     edge_id_list = []
@@ -461,15 +484,15 @@ def get_edge_nodes(edges) -> [gpd.GeoDataFrame, gpd.GeoDataFrame]:
             line_segments = [LineString([coords for coords in coords_list[:mid_idx+1]]), LineString([coords for coords in coords_list[mid_idx:]])]
             
         # Add start to midpoint of linestring
-        edge_id_list.append(row['edge_id']+'_0')
+        edge_id_list.append(row['street_id']+'_0')
         u_list.append(row['u'])
-        v_list.append(row['edge_id']+'_m')
+        v_list.append(row['street_id']+'_m')
         length_list.append(line_segments[0].length)
         geometry_list.append(line_segments[0])
         
         # Add midpoint to end of linestring
-        edge_id_list.append(row['edge_id']+'_1')
-        u_list.append(row['edge_id']+'_m')
+        edge_id_list.append(row['street_id']+'_1')
+        u_list.append(row['street_id']+'_m')
         v_list.append(row['v'])
         length_list.append(line_segments[1].length)
         geometry_list.append(line_segments[1])
@@ -478,9 +501,9 @@ def get_edge_nodes(edges) -> [gpd.GeoDataFrame, gpd.GeoDataFrame]:
 
     # Select attribute columns
     col = list(edges.columns[5:])
-    cols = ['edge_id', 'length'] + col
+    cols = ['street_id', 'length'] + col
     # Get geodataframes corresponding to edges and edge nodes
-    split_edges = gpd.GeoDataFrame({'edge_id': edge_id_list, 'u': u_list, 'v': v_list, 'length': length_list}, crs=proj_edges.crs, geometry = geometry_list)
+    split_edges = gpd.GeoDataFrame({'street_id': edge_id_list, 'u': u_list, 'v': v_list, 'length': length_list}, crs=proj_edges.crs, geometry = geometry_list)
     edge_nodes = gpd.GeoDataFrame(data=edges[cols], crs = proj_edges.crs, geometry = gpd.points_from_xy(x_list, y_list))
     
     # Reproject to global coordinates
@@ -558,13 +581,13 @@ def remove_non_numeric_columns_objects(objects, keep_geometry=False):
         only_numerics = object.select_dtypes(include=numerics)
  
         if key == 'intersection':
-            only_numerics = only_numerics.drop(columns = ['intersection_id', 'osmid'], axis=1)
+            only_numerics = only_numerics.drop(columns = ['intersection_id', 'osmid', 'x', 'y'], axis=1)
         elif key == 'plot':
-            only_numerics = only_numerics.drop(columns = ['plot_id'], axis=1)
+            only_numerics = only_numerics.drop(columns = ['plot_id', 'boundary_id'], axis=1)
         elif key == 'building':
-            pass
+            only_numerics = only_numerics
         elif key == 'street':
-            only_numerics = only_numerics.drop(columns = ['edge_id'], axis=1)
+            only_numerics = only_numerics.drop(columns = ['u', 'v', 'street_id'], axis=1)
             
         objects_new[key] = only_numerics
 

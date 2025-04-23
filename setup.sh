@@ -1,12 +1,37 @@
 #!/usr/bin/env bash
-set -ex  # show commands and exit on error
+set -euo pipefail           # safer defaults
+set -x                      # echo commands (remove if you prefer)
 
-PKG_VERSION=0.5.8
+# ──────────────────────────────────────────────────────────────
+PKG_VERSION="0.5.8"
 CONDA_ENV="urbanity"
 
-# Function to set up Conda environment
-setup_conda_env() {
-    # 1. Source conda so 'conda' and 'conda activate' work
+# ────────── argument parsing ──────────
+BACKEND="none"              # default
+case "${1-}" in
+  pyg|dgl) BACKEND="$1" ;;  # accept “pyg” or “dgl”
+  ""|none) ;;               # default already set
+  -h|--help)
+      echo "Usage: $0 [pyg|dgl|none]" ; exit 0 ;;
+  *)
+      echo "Unknown option '$1'. Use 'pyg', 'dgl', or omit." >&2 ; exit 1 ;;
+esac
+echo "→ Selected backend: $BACKEND"
+
+# Check if GPU exists
+GPU_TYPE="cpu"
+
+# ---- NVIDIA / CUDA ----
+if command -v nvidia-smi >/dev/null 2>&1; then
+    if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -q .; then
+        GPU_TYPE="cuda"
+        return 0
+    fi
+fi
+
+# ────────── helper: create & configure conda env ──────────
+setup_conda_env () {
+  # 1. Source conda so 'conda' and 'conda activate' work
     source "$(conda info --base)/etc/profile.d/conda.sh"
 
     # 2. (Optional) remove old environment if present
@@ -41,35 +66,64 @@ setup_conda_env() {
     
     # SVI workflow
     python -m pip install osmium
-    python -m pip install torch torchvision
-    python -m pip install transformers
-    python -m pip install vt2geojson
-    mamba install -c conda-forge -y opencv
-}
+    # ── 4. install backend ─────────────────────────────────────────────
+    echo "Installing backend '$BACKEND' (Device: $GPU_TYPE)"
 
-# Detect the operating system
-case "$OSTYPE" in
-    linux-gnu*)
-        echo "Detected Linux OS"
-        sudo apt-get update
-        sudo apt-get install -y gcc
-        setup_conda_env
-        sudo chown -R "$USER" .
+    case "$BACKEND" in
+    pyg)
+        # ① Install the right PyTorch wheel first
+        if [[ $GPU_TYPE == "cuda" ]]; then
+            python -m pip install torch torchvision
+            WHEEL_TAG="cu121"
+        else                                       # CPU fallback
+            python -m pip install torch torchvision
+            WHEEL_TAG="cpu"
+        fi
+
+        # ② Install the PyTorch‑Geometric stack that matches the wheel
+        PYG_URL="https://data.pyg.org/whl/torch-2.4.0+${WHEEL_TAG}.html"
+        python -m pip install torch_geometric torch_scatter torch_sparse \
+                    torch_cluster torch_spline_conv -f "${PYG_URL}"
         ;;
-    darwin*)
-        echo "Detected macOS"
-        setup_conda_env
+
+    dgl)
+        if [[ $GPU_TYPE == "cuda" ]]; then
+            # pick the CUDA build that matches your driver / toolkit
+            pip install dgl-cu121            # change cuXYZ if needed
+        else
+            pip install dgl                  # CPU‑only or ROCm build
+        fi
         ;;
-    cygwin*|msys*)
-        echo "Detected Windows (via Cygwin/MSYS)"
-        source "/c/Users/$(whoami)/anaconda3/etc/profile.d/conda.sh"
-        setup_conda_env
+
+    none)
+        echo "No deep‑learning backend selected – skipping."
         ;;
+
     *)
-        echo "Unknown OS type: $OSTYPE"
+        echo "Unknown backend '$BACKEND'. Use pyg, dgl, or none." >&2
         exit 1
         ;;
+    esac
+
+  # 5. misc (common) extras
+  python -m pip install osmium transformers vt2geojson
+  mamba install -y opencv -c conda-forge
+}
+
+# ────────── OS detection (unchanged) ──────────
+case "$OSTYPE" in
+  linux-gnu*)
+      sudo apt-get update
+      sudo apt-get install -y gcc
+      setup_conda_env
+      sudo chown -R "$USER" .
+      ;;
+  darwin*)  setup_conda_env ;;
+  cygwin*|msys*)
+      source "/c/Users/$(whoami)/anaconda3/etc/profile.d/conda.sh"
+      setup_conda_env
+      ;;
+  *) echo "Unknown OS type: $OSTYPE" ; exit 1 ;;
 esac
 
-echo "All done! Environment set up successfully."
-
+echo "🎉  Environment '$CONDA_ENV' ready (backend: $BACKEND)"

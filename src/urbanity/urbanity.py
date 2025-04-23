@@ -2631,7 +2631,7 @@ class Map(ipyleaflet.Map):
                 polygon_features.append(attributes)
 
             # Create geodataframe associating each polygon with their own edge ids, filter by minimum size
-            urban_plots['edge_ids'] = polygon_features
+            urban_plots['street_id'] = polygon_features
             urban_plots['plot_area'] = urban_plots.geometry.area
             urban_plots['plot_perimeter'] = urban_plots.geometry.length
             urban_plots = urban_plots[urban_plots['plot_area'] > minimum_area]
@@ -3125,7 +3125,7 @@ class Map(ipyleaflet.Map):
 
             if os.path.isfile(osm_path):
                 os.remove(osm_path)
-
+            self.polygon_bounds = self.polygon_bounds[['geometry']]
             self.polygon_bounds = self.polygon_bounds.reset_index()
             self.polygon_bounds.columns = ['boundary_id', 'geometry']
 
@@ -3190,8 +3190,7 @@ class Map(ipyleaflet.Map):
             nodes['intersection_id'] = nodes.index
             nodes = nodes[['intersection_id','osmid', 'x', 'y', 'geometry']]
             
-            edges['edge_id'] = edges.index
-            edges = edges[['edge_id', 'u', 'v', 'length','geometry']]
+            edges = edges[['u', 'v', 'length','geometry']]
 
             edges =  drop_duplicate_lines(edges)
 
@@ -3382,6 +3381,7 @@ class Map(ipyleaflet.Map):
                     buildings = assign_building_heights(combined_gdf, target_key, buildings)
         
                 # buildings = buildings.drop(columns=['bid_centroid'])
+                buildings['bid'] = buildings['bid'].astype(str)
                 self.buildings = buildings
 
             print(f'Buildings constructed. Time taken: {round(time.time() - start)}.')
@@ -3442,10 +3442,10 @@ class Map(ipyleaflet.Map):
      
             # Get inner and out edges
             outside_edges_proj = proj_edges.overlay(proj_boundary_expanded, how='difference')
-            inside_edges_proj = proj_edges[~proj_edges['edge_id'].isin(list(outside_edges_proj['edge_id']))]
+            inside_edges_proj = proj_edges[~proj_edges['street_id'].isin(list(outside_edges_proj['street_id']))]
 
-            # Group linestring with edge_ids
-            linestrings_with_attributes = [(linestring, edge_id) for linestring, edge_id in zip(inside_edges_proj.geometry, inside_edges_proj['edge_id'])]
+            # Group linestring with street_id
+            linestrings_with_attributes = [(linestring, street_id) for linestring, street_id in zip(inside_edges_proj.geometry, inside_edges_proj['street_id'])]
             clipped_lines = gpd.clip(inside_edges_proj, proj_boundary)
 
             tolerance = 1
@@ -3462,10 +3462,10 @@ class Map(ipyleaflet.Map):
             # Create urban plots
             urban_plots = gpd.GeoDataFrame(data={'plot_id': range(len(polygons))}, crs=proj_edges.crs, geometry = polygons)
 
-            # Generate geodataframe of lines and edge_ids
+            # Generate geodataframe of lines and street_id
             urban_lines = gpd.GeoDataFrame(data=[k[1] for k in linestrings_with_attributes], crs = proj_edges.crs, geometry=[k[0] for k in linestrings_with_attributes])
-            urban_lines.columns = ['edge_id', 'geometry']
-            urban_lines['edge_id'] = urban_lines['edge_id'].astype(int)
+            urban_lines.columns = ['street_id', 'geometry']
+            urban_lines['street_id'] = urban_lines['street_id'].astype(int)
 
             # 1) Spatial join on 'intersects' (or nearest if you must handle near matches)
             joined = gpd.sjoin(urban_lines, urban_plots, how='right', predicate='intersects')
@@ -3491,10 +3491,10 @@ class Map(ipyleaflet.Map):
                 )
 
             joined = joined[joined['intersection'].apply(is_nonpoint_line)]
-            joined = joined.groupby('plot_id')['edge_id'].unique()
+            joined = joined.groupby('plot_id')['street_id'].unique()
 
             urban_plots = urban_plots.merge(joined, how='left', on='plot_id')
-            urban_plots = urban_plots.rename(columns={'edge_id':'edge_ids'})
+
 
             # If you need them grouped by polygon:
 

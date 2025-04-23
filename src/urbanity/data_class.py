@@ -311,7 +311,7 @@ class UrbanGraph:
                                    random_state)
 
     def to_pyg_graph():
-        pass
+        return 
 
     def to_dgl():
         pass
