@@ -25,7 +25,6 @@ GPU_TYPE="cpu"
 if command -v nvidia-smi >/dev/null 2>&1; then
     if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -q .; then
         GPU_TYPE="cuda"
-        return 0
     fi
 fi
 
@@ -66,6 +65,7 @@ setup_conda_env () {
     
     # SVI workflow
     python -m pip install osmium
+    
     # ── 4. install backend ─────────────────────────────────────────────
     echo "Installing backend '$BACKEND' (Device: $GPU_TYPE)"
 
@@ -106,7 +106,7 @@ setup_conda_env () {
     esac
 
   # 5. misc (common) extras
-  python -m pip install osmium transformers vt2geojson
+  python -m pip install transformers vt2geojson
   mamba install -y opencv -c conda-forge
 }
 
