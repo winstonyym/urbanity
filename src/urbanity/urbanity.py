@@ -204,7 +204,7 @@ class Map(ipyleaflet.Map):
             gdf = dissolve_poly(gdf, self.country)
 
         # Assign polygon boundary attribute to polygon object
-        gdf = gdf.to_crs('epsg:4326')
+        gdf = gdf.set_crs('epsg:4326', allow_override=True)
         self.polygon_bounds = gdf
 
         # Add polygon boundary as map layer
@@ -3021,6 +3021,7 @@ class Map(ipyleaflet.Map):
     
     def get_urban_graph(
             self, 
+            location: str = '',
             network_filepath: str = '', 
             svi_filepath: str = '',
             building_filepath: str = '',
@@ -3044,6 +3045,7 @@ class Map(ipyleaflet.Map):
         Bandwidth (m) can be specified to buffer network, obtaining neighbouring nodes within buffered area of network.
 
         Args:
+            location (str): Accepts city name or country name to obtain OpenStreetMap data.
             network_filepath (str): Specify path to osm.pbf file.
             svi_filepath (str): Specify path to street view imagery file.
             building_filepath (str): Specify path to overture building footprint file.
@@ -3082,6 +3084,7 @@ class Map(ipyleaflet.Map):
         """ 
         
         # If precomputed available, use precomputed
+        self.location = location
         start = time.time()
 
         if self.network:

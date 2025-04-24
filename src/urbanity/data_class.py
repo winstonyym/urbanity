@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 import geopandas as gpd
 import pandas as pd
@@ -22,7 +23,7 @@ class UrbanGraph:
     street: gpd.GeoDataFrame = field(default_factory=lambda: gpd.GeoDataFrame())
     intersection: gpd.GeoDataFrame = field(default_factory=lambda: gpd.GeoDataFrame())
 
-    boundary_to_plot: np.ndarray = None
+    boundary_to_plot: np.ndarray = np.array('None')
     plot_to_boundary: np.ndarray = None
     plot_to_plot: np.ndarray = None
     building_to_building: np.ndarray = None
@@ -99,7 +100,7 @@ class UrbanGraph:
         
     def initialize_edges(self, building_neighbours = 'knn', knn=5, distance=100):
 
-        if self.boundary_to_plot is None: 
+        if self.boundary_to_plot.size == 1: 
             _, self.plot_to_plot = get_plot_to_plot_edges(self.plot)
             _, self.building_to_building = get_building_to_building_edges(self.building, 
                                                                         return_neighbours = building_neighbours,
@@ -156,17 +157,26 @@ class UrbanGraph:
         with zipfile.ZipFile(filename, 'w') as z:
             # Save each GeoDataFrame as a GeoParquet file inside the zip
             for name, gdf in self.geo_store.items():
+                if name == 'plot':
+                    target_cols = ['street_id', 'bid']
+                    for col in target_cols:
+                        npy_name = f"plot_{col}.npy"
+                        arr = np.array(self.geo_store[name][col].to_list(), dtype=object)
+                        np.save(npy_name, arr, allow_pickle=True)
+                        z.write(npy_name, arcname=npy_name)
+                        os.remove(npy_name)  # clean up
+                        gdf = gdf.drop(columns=col)
                 parquet_name = f"{name}.parquet"
                 gdf.to_parquet(parquet_name)
                 z.write(parquet_name, arcname=parquet_name)
-                # cleanup the temporary parquet file if needed
+                os.remove(parquet_name)  # clean up
 
             # Save each numpy array
             for name, arr in self.edge_store.items():
                 npy_name = f"{name}.npy"
                 np.save(npy_name, arr)
                 z.write(npy_name, arcname=npy_name)
-                # cleanup the temporary numpy file if needed
+                os.remove(npy_name)  # clean up
 
     def load_graph(self, filename):
         """
@@ -189,14 +199,22 @@ class UrbanGraph:
                     dict_key = file.rsplit('.', 1)[0]
                     geodf_dict[dict_key] = gdf
 
+            for file in z.namelist():
                 # If it's a NumPy array
-                elif file.endswith('.npy'):
-                    with z.open(file) as f:
-                        # Read the data into memory as bytes, then np.load from that
-                        data = io.BytesIO(f.read())
-                        arr = np.load(data, allow_pickle=True)
-                    dict_key = file.rsplit('.', 1)[0]
-                    array_dict[dict_key] = arr
+                if file.endswith('.npy'):
+                    if 'id' in file:
+                        with z.open(file) as f:
+                            data = io.BytesIO(f.read())
+                            arr = np.load(data, allow_pickle=True)
+                            dict_key = file.rsplit('.', 1)[0][5:]
+                            geodf_dict['plot'][dict_key] = arr
+                    else:
+                        with z.open(file) as f:
+                            # Read the data into memory as bytes, then np.load from that
+                            data = io.BytesIO(f.read())
+                            arr = np.load(data, allow_pickle=True)
+                        dict_key = file.rsplit('.', 1)[0]
+                        array_dict[dict_key] = arr
 
         self.boundary = geodf_dict.get('boundary', None)
         self.building = geodf_dict.get('building', None)
