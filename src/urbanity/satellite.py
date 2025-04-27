@@ -16,7 +16,7 @@ from PIL import Image
 from tqdm import tqdm
 import geopandas as gpd
 from shapely import geometry
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point
 
 from rasterio.mask import mask
 from rasterio.io import MemoryFile
@@ -26,6 +26,8 @@ import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import matplotlib.gridspec as gridspec
 import rasterio.transform as rtransform
+from shapely.geometry import box
+from rasterio.transform import from_bounds
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 
 
@@ -607,7 +609,120 @@ def extract_tiff_from_shapefile(geotiff_path, shapefile, output_filepath=None, z
         return data_array
     
 
-def gee_layer_from_boundary(boundary, layer_name, delta=0.1, band='', index=0):
+def merge_raster_to_gdf(raster, gdf, id_col = 'plot_id', raster_col='value', num_classes = 1, method='mean'):
+    res_intersection = raster.overlay(gdf)
+
+    if method == 'proportion':
+        val_series = res_intersection.groupby(id_col)[raster_col].value_counts()
+
+        raster_df = pd.DataFrame(index = val_series.index, data = val_series.values).reset_index()
+
+        # return lcz_df
+        raster_df = pd.pivot(raster_df, index=id_col, columns=raster_col, values=0).fillna(0)
+    
+        # Sum across rows to get total for each row
+        row_totals = raster_df.sum(axis=1)
+        raster_df = raster_df.div(row_totals, axis=0) * 100
+
+        # Rename columns
+        raster_df.columns = [raster_col + '_' + str(col) for col in raster_df.columns]
+        raster_column_names = [raster_col + '_' +str(i) for i in range(0,num_classes)]
+
+        for i in raster_column_names:
+            if i not in set(raster_df.columns):
+                raster_df[i] = 0
+            elif i in set(raster_df.columns):
+                raster_df[i] = raster_df[i].replace(np.nan, 0)
+        
+        raster_df = raster_df[raster_column_names]
+        
+        # Join pixel mean to network edges
+        gdf = gdf.merge(raster_df, on=id_col, how='left')
+
+    elif method == 'mean': 
+        mean_series = res_intersection.groupby(id_col)[raster_col].mean()
+        mean_series.name = f'{raster_col}_mean'
+
+        std_series = res_intersection.groupby(id_col)[raster_col].std()
+        std_series.name = f'{raster_col}_std'
+        
+        # Join pixel mean to network edges
+        gdf = gdf.merge(mean_series, on=id_col, how='left')
+        gdf[f'{raster_col}_mean'] = gdf[f'{raster_col}_mean'].fillna(0)
+
+        gdf = gdf.merge(std_series, on=id_col, how='left')
+        gdf[f'{raster_col}_std'] = gdf[f'{raster_col}_std'].fillna(0)
+
+    return gdf
+
+def tiled_large_array(boundary, layer_name, delta=0.1, band='', index=0):
+    """Utility function to return mosaic array for large area by first tiling it. 
+
+    Args:
+        boundary (GeoDataFrame): The boundary polygon(s) for the area of interest.
+        layer_name (str): Earth Engine ImageCollection ID or Image ID.
+        delta (float): Optional parameter (not strictly needed if using ee_to_numpy).
+        band (str): The band name to select. If provided, we select by band name.
+        index (int): The index of the image in the collection to fetch (if multiple images).
+
+    Returns:
+        Full numpy array with mosaic-ed raster tiles
+    """
+    array_list = []
+
+    tiles = split_bbox_into_grid(boundary, n=16)
+
+    for i in range(len(tiles)):
+        current_row = tiles.iloc[[i]]
+
+        # 2. Convert boundary to Earth Engine geometry
+        tile_geom = current_row[['geometry']]  # Keep only geometry column
+        gdf_json = json.loads(tile_geom.to_json())
+        ee_fc = ee.FeatureCollection(gdf_json["features"])
+        roi = ee_fc.geometry()
+
+            # 3. Attempt to load layer_name as an ImageCollection and pick one by index.
+        #    If that fails or yields an empty collection, treat as single Image.
+        try:
+            # Try as an ImageCollection
+            collection = ee.ImageCollection(layer_name).filterBounds(roi)
+            count = collection.size().getInfo()
+            if count > 0:
+                # Sort by time and select the desired image
+                sorted_collection = collection.sort("system:time_start", False)
+                if index >= count:
+                    raise ValueError(
+                        f"Requested index {index} is out of range. Only {count} images found in collection."
+                    )
+                image_ee = ee.Image(sorted_collection.toList(count).get(index))
+            else:
+                # Fallback to treating layer_name as single Image
+                image_ee = ee.Image(layer_name).clip(roi)
+        except Exception:
+            # If it fails as a collection, interpret as a single Image
+            image_ee = ee.Image(layer_name).clip(roi)
+
+        # Check available bands
+        info = image_ee.getInfo()
+        available_bands = [b['id'] for b in info['bands']]
+
+        # 4. If the user specified a band name, select it; otherwise select the first band
+        if band != '':
+            if band not in available_bands:
+                raise ValueError(
+                    f"Error: '{band}' is not a valid band. Available bands are: {available_bands}"
+                )
+            image_ee = image_ee.select(band).clip(roi).unmask()
+        else:
+            first_band_name = available_bands[0]
+            image_ee = image_ee.select(first_band_name).clip(roi).unmask()
+        
+        arr = geemap.ee_to_numpy(image_ee, region=roi)
+        array_list.append(arr)
+
+    return concat_grid(array_list)
+        
+def gee_layer_from_boundary(boundary, layer_name, delta=0.1, band='', index=0, large=True):
     """
     Fetch a raster from the given Earth Engine ImageCollection or single Image 
     over the input boundary, and convert it to a GeoDataFrame with polygon 
@@ -623,61 +738,106 @@ def gee_layer_from_boundary(boundary, layer_name, delta=0.1, band='', index=0):
     Returns:
         GeoDataFrame with columns ['value'] and the polygon geometry of each pixel.
     """
-
-    # 1. Compute bounding box from boundary
-    minx, miny, maxx, maxy = boundary.geometry.total_bounds
-    
-    # Increase delta if bounding box is large
-    ncols_est = math.ceil((maxx - minx) / delta)
-    nrows_est = math.ceil((maxy - miny) / delta)
-    if (ncols_est > 10) or (nrows_est > 10):
-        delta *= 5
-        print("Increased delta size (fishnet), though we won't necessarily use it below.")
-
-    # 2. Convert boundary to Earth Engine geometry
-    boundary = boundary[['geometry']]  # Keep only geometry column
-    gdf_json = json.loads(boundary.to_json())
-    ee_fc = ee.FeatureCollection(gdf_json["features"])
-    roi = ee_fc.geometry()
-
-    # 3. Attempt to load layer_name as an ImageCollection and pick one by index.
-    #    If that fails or yields an empty collection, treat as single Image.
-    try:
-        # Try as an ImageCollection
-        collection = ee.ImageCollection(layer_name).filterBounds(roi)
-        count = collection.size().getInfo()
-        if count > 0:
-            # Sort by time and select the desired image
-            sorted_collection = collection.sort("system:time_start", False)
-            if index >= count:
-                raise ValueError(
-                    f"Requested index {index} is out of range. Only {count} images found in collection."
-                )
-            image_ee = ee.Image(sorted_collection.toList(count).get(index))
-        else:
-            # Fallback to treating layer_name as single Image
-            image_ee = ee.Image(layer_name).clip(roi)
-    except Exception:
-        # If it fails as a collection, interpret as a single Image
-        image_ee = ee.Image(layer_name).clip(roi)
-
-    # Check available bands
-    info = image_ee.getInfo()
-    available_bands = [b['id'] for b in info['bands']]
-
-    # 4. If the user specified a band name, select it; otherwise select the first band
-    if band != '':
-        if band not in available_bands:
-            raise ValueError(
-                f"Error: '{band}' is not a valid band. Available bands are: {available_bands}"
-            )
-        image_ee = image_ee.select(band).clip(roi).unmask()
+    # Toggle tiling mechanism if area is large and want to use large
+    if (boundary.geometry.area.values > 0.2) and large:
+        large=True
     else:
-        first_band_name = available_bands[0]
-        image_ee = image_ee.select(first_band_name).clip(roi).unmask()
+        large=False
+    
+    if large:
+        # 2. Convert boundary to Earth Engine geometry
+        boundary = boundary[['geometry']]  # Keep only geometry column
+        gdf_json = json.loads(boundary.to_json())
+        ee_fc = ee.FeatureCollection(gdf_json["features"])
+        roi = ee_fc.geometry()
 
-    # 5. Convert to NumPy array
-    arr = geemap.ee_to_numpy(image_ee, region=roi)
+        # 3. Attempt to load layer_name as an ImageCollection and pick one by index.
+        #    If that fails or yields an empty collection, treat as single Image.
+        try:
+            # Try as an ImageCollection
+            collection = ee.ImageCollection(layer_name).filterBounds(roi)
+            count = collection.size().getInfo()
+            if count > 0:
+                # Sort by time and select the desired image
+                sorted_collection = collection.sort("system:time_start", False)
+                if index >= count:
+                    raise ValueError(
+                        f"Requested index {index} is out of range. Only {count} images found in collection."
+                    )
+                image_ee = ee.Image(sorted_collection.toList(count).get(index))
+            else:
+                # Fallback to treating layer_name as single Image
+                image_ee = ee.Image(layer_name).clip(roi)
+        except Exception:
+            # If it fails as a collection, interpret as a single Image
+            image_ee = ee.Image(layer_name).clip(roi)
+
+        # Check available bands
+        info = image_ee.getInfo()
+        available_bands = [b['id'] for b in info['bands']]
+
+        # 4. If the user specified a band name, select it; otherwise select the first band
+        if band != '':
+            if band not in available_bands:
+                raise ValueError(
+                    f"Error: '{band}' is not a valid band. Available bands are: {available_bands}"
+                )
+            image_ee = image_ee.select(band).clip(roi).unmask()
+        else:
+            first_band_name = available_bands[0]
+            image_ee = image_ee.select(first_band_name).clip(roi).unmask()
+
+        arr = tiled_large_array(boundary, layer_name, delta=0.1, band='', index=0)
+        return arr
+
+    else:
+
+        # 2. Convert boundary to Earth Engine geometry
+        boundary = boundary[['geometry']]  # Keep only geometry column
+        gdf_json = json.loads(boundary.to_json())
+        ee_fc = ee.FeatureCollection(gdf_json["features"])
+        roi = ee_fc.geometry()
+
+        # 3. Attempt to load layer_name as an ImageCollection and pick one by index.
+        #    If that fails or yields an empty collection, treat as single Image.
+        try:
+            # Try as an ImageCollection
+            collection = ee.ImageCollection(layer_name).filterBounds(roi)
+            count = collection.size().getInfo()
+            if count > 0:
+                # Sort by time and select the desired image
+                sorted_collection = collection.sort("system:time_start", False)
+                if index >= count:
+                    raise ValueError(
+                        f"Requested index {index} is out of range. Only {count} images found in collection."
+                    )
+                image_ee = ee.Image(sorted_collection.toList(count).get(index))
+            else:
+                # Fallback to treating layer_name as single Image
+                image_ee = ee.Image(layer_name).clip(roi)
+        except Exception:
+            # If it fails as a collection, interpret as a single Image
+            image_ee = ee.Image(layer_name).clip(roi)
+
+        # Check available bands
+        info = image_ee.getInfo()
+        available_bands = [b['id'] for b in info['bands']]
+
+        # 4. If the user specified a band name, select it; otherwise select the first band
+        if band != '':
+            if band not in available_bands:
+                raise ValueError(
+                    f"Error: '{band}' is not a valid band. Available bands are: {available_bands}"
+                )
+            image_ee = image_ee.select(band).clip(roi).unmask()
+        else:
+            first_band_name = available_bands[0]
+            image_ee = image_ee.select(first_band_name).clip(roi).unmask()
+
+        # 5. Convert to NumPy array
+        # arr = fetch_tiled_array(image_ee, roi, max_tile_px=2048)
+        arr = geemap.ee_to_numpy(image_ee, region=roi)
+
     if arr is None:
         raise ValueError(
             "ee_to_numpy returned None. Possibly no valid pixels in the region or an error retrieving data."
@@ -756,51 +916,179 @@ def gee_layer_from_boundary(boundary, layer_name, delta=0.1, band='', index=0):
 
     return gdf
 
+def concat_grid(tile_list, *, nrows=None, ncols=None, fill_value=np.nan):
+    """
+    Stitch a flat list of NumPy arrays—supplied row-major—into one mosaic.
 
-def merge_raster_to_gdf(raster, gdf, id_col = 'plot_id', raster_col='value', num_classes = 1, method='mean'):
-    res_intersection = raster.overlay(gdf)
+    Parameters
+    ----------
+    tile_list : list[np.ndarray]
+        Tiles in row-major order:  [row-0-col-0, row-0-col-1, …, row-1-col-0, …]
+    nrows, ncols : int, optional
+        Grid dimensions.  • If both are None, they are inferred by
+          *sqrt*—works for 4, 16, 64, … (perfect squares).
+        • If only one is given, the other is derived from `len(tile_list)`.
+    fill_value : scalar, default np.nan
+        Value used when padding tiles whose shapes differ within a row/column.
 
-    if method == 'proportion':
-        val_series = res_intersection.groupby(id_col)[raster_col].value_counts()
+    Returns
+    -------
+    np.ndarray
+        The stitched raster.
 
-        raster_df = pd.DataFrame(index = val_series.index, data = val_series.values).reset_index()
+    Raises
+    ------
+    ValueError
+        If the list length is incompatible with the requested grid.
+    """
+    n_tiles = len(tile_list)
 
-        # return lcz_df
-        raster_df = pd.pivot(raster_df, index=id_col, columns=raster_col, values=0).fillna(0)
-    
-        # Sum across rows to get total for each row
-        row_totals = raster_df.sum(axis=1)
-        raster_df = raster_df.div(row_totals, axis=0) * 100
+    # ---- 1. derive grid shape ----------------------------------------
+    if nrows is None and ncols is None:
+        root = int(math.isqrt(n_tiles))
+        if root * root != n_tiles:
+            raise ValueError("tile_list length is not a perfect square; "
+                             "specify nrows and/or ncols.")
+        nrows = ncols = root
+    elif nrows is None:
+        if n_tiles % ncols:
+            raise ValueError("ncols does not divide tile count.")
+        nrows = n_tiles // ncols
+    elif ncols is None:
+        if n_tiles % nrows:
+            raise ValueError("nrows does not divide tile count.")
+        ncols = n_tiles // nrows
+    else:
+        if nrows * ncols != n_tiles:
+            raise ValueError("nrows × ncols != tile count.")
 
-        # Rename columns
-        raster_df.columns = [raster_col + '_' + str(col) for col in raster_df.columns]
-        raster_column_names = [raster_col + '_' +str(i) for i in range(0,num_classes)]
+    # ---- 2. find max height per row & max width per col --------------
+    max_h_per_row = [
+        max(tile_list[r * ncols + c].shape[0] for c in range(ncols))
+        for r in range(nrows)
+    ]
+    max_w_per_col = [
+        max(tile_list[r * ncols + c].shape[1] for r in range(nrows))
+        for c in range(ncols)
+    ]
 
-        for i in raster_column_names:
-            if i not in set(raster_df.columns):
-                raster_df[i] = 0
-            elif i in set(raster_df.columns):
-                raster_df[i] = raster_df[i].replace(np.nan, 0)
-        
-        raster_df = raster_df[raster_column_names]
-        
-        # Join pixel mean to network edges
-        gdf = gdf.merge(raster_df, on=id_col, how='left')
+    # ---- 3. pad tiles so shapes align within grid --------------------
+    padded = []
+    for r in range(nrows):
+        for c in range(ncols):
+            t = tile_list[r * ncols + c]
+            h_pad = max_h_per_row[r] - t.shape[0]
+            w_pad = max_w_per_col[c] - t.shape[1]
+            if h_pad or w_pad:
+                t = np.pad(
+                    t,
+                    ((0, h_pad), (0, w_pad)),
+                    mode="constant",
+                    constant_values=fill_value,
+                )
+            padded.append(t)
 
-    elif method == 'mean': 
-        mean_series = res_intersection.groupby(id_col)[raster_col].mean()
-        mean_series.name = f'{raster_col}_mean'
+    # ---- 4. horizontal then vertical concat --------------------------
+    rows = [
+        np.hstack(padded[r * ncols : (r + 1) * ncols]) for r in range(nrows)
+    ]
+    mosaic = np.vstack(rows)
+    return mosaic
 
-        std_series = res_intersection.groupby(id_col)[raster_col].std()
-        std_series.name = f'{raster_col}_std'
-        
-        # Join pixel mean to network edges
-        gdf = gdf.merge(mean_series, on=id_col, how='left')
-        gdf[f'{raster_col}_mean'] = gdf[f'{raster_col}_mean'].fillna(0)
+def split_bbox_into_grid(bbox_gdf, *, n=None, nrows=None, ncols=None,
+                         id_col="tile_id", row_major=True):
+    """
+    Split the bounding box of `bbox_gdf` into `nrows × ncols` equal-sized
+    rectangles, or into *≈ n* rectangles if only `n` is given.
 
-        gdf = gdf.merge(std_series, on=id_col, how='left')
-        gdf[f'{raster_col}_std'] = gdf[f'{raster_col}_std'].fillna(0)
+    Parameters
+    ----------
+    bbox_gdf : GeoDataFrame
+        Any GeoDataFrame whose `.total_bounds` defines the area to split.
+    n : int, optional
+        Desired number of tiles (e.g. 4, 8, 16).  
+        If `nrows`/`ncols` are **not** supplied, the function chooses a
+        rectangular grid whose tile count ≥ `n` and is as square as possible.
+    nrows, ncols : int, optional
+        Explicit grid dimensions.  If one is `None`, it is derived from
+        the other and `n` (e.g. `nrows=2, n=None, ncols=None` → `ncols`
+        chosen so `2×ncols ≥ n`).
+    id_col : str, default "tile_id"
+        Name of the identifier column in the returned GeoDataFrame.
+    row_major : bool, default True
+        If `True`, IDs increase left-to-right, top-to-bottom (matrix style).
+        If `False`, they increase column-wise (top-to-bottom, then left-right).
 
-    return gdf
+    Returns
+    -------
+    GeoDataFrame
+        Grid cells in the same CRS as the input.  Extra cells (if the chosen
+        grid has more than `n` tiles) are trimmed from the **bottom-right**
+        corner so the row/column structure stays intact.
+    """
+    # ---- derive grid shape -------------------------------------------
+    if nrows is None and ncols is None:
+        if n is None:
+            raise ValueError("Specify `n` or (`nrows`, `ncols`).")
+        # choose the most square grid with rows*cols >= n
+        nrows = int(math.floor(math.sqrt(n)))
+        ncols = int(math.ceil(n / nrows))
+    elif nrows is None:                    # ncols is given
+        if n is None:
+            raise ValueError("Need `n` to derive nrows.")
+        nrows = int(math.ceil(n / ncols))
+    elif ncols is None:                    # nrows is given
+        if n is None:
+            raise ValueError("Need `n` to derive ncols.")
+        ncols = int(math.ceil(n / nrows))
+
+    # ---- bounds -------------------------------------------------------
+    minx, miny, maxx, maxy = bbox_gdf.total_bounds
+    dx = (maxx - minx) / ncols
+    dy = (maxy - miny) / nrows
+
+    # ---- build tiles --------------------------------------------------
+    tiles, ids = [], []
+    current_id = 0
+    for r in range(nrows):
+        y_top    = maxy - r * dy
+        y_bottom = maxy - (r + 1) * dy
+        for c in range(ncols):
+            if n is not None and current_id >= n:          # trim extras
+                break
+            x_left  = minx + c * dx
+            x_right = minx + (c + 1) * dx
+            tiles.append(box(x_left, y_bottom, x_right, y_top))
+            ids.append(current_id)
+            current_id += 1
+        if n is not None and current_id >= n:
+            break
+
+    # ---- reorder IDs (row-major vs column-major) ----------------------
+    if not row_major:
+        # transpose indexing: id = c * nrows + r  instead of r * ncols + c
+        ids = sorted(range(len(tiles)),
+                     key=lambda k: (k % nrows) * ncols + (k // nrows))
+
+    return gpd.GeoDataFrame({id_col: ids},
+                            geometry=tiles,
+                            crs=bbox_gdf.crs)
 
 
+def get_affine_transform(gdf, raster):
+
+    # ❶ Bounding box (in the same CRS you want for the raster)
+    minx, miny, maxx, maxy = gdf.total_bounds   # (west, south, east, north)
+
+    # ❷ Raster dimensions
+    if raster.ndim == 3:          # (bands, rows, cols)
+        height, width = raster[:,:,0].shape
+    else:                      # (rows, cols)
+        height, width = raster.shape
+
+    transform = from_bounds(
+        minx, miny, maxx, maxy,   # geographic extent
+        width, height             # raster grid size
+    )
+
+    return transform

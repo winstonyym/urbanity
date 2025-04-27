@@ -5,12 +5,14 @@ import pandas as pd
 import numpy as np
 import h5py
 import pickle
+import torch
 from .utils import get_plot_to_plot_edges, get_building_to_street_edges, get_edge_nodes, get_building_to_building_edges, \
                    get_intersection_to_street_edges, get_buildings_in_plot_edges, get_edges_along_plot, boundary_to_plot, \
                    remove_non_numeric_columns_objects, standardise_and_scale, fill_na_in_objects, one_hot_encode_categorical
 from typing import Dict
 from .visualisation import plot_graph
 from torch_geometric.data import HeteroData
+import torch_geometric.transforms as T
 
 import zipfile
 import io
@@ -328,8 +330,35 @@ class UrbanGraph:
                                    test_ratio,
                                    random_state)
 
-    def to_pyg_graph():
-        return 
+    def to_pyg_graph(self, target_col = 'building', target_value = []):
+
+        data = HeteroData()
+        objects_copy = self.geo_store.copy()
+
+        node_types = ['boundary', 'plot','building','street','intersection']
+
+        for node in node_types:
+            objects_copy[node][f'{node}_id'] = range(len(objects_copy[node]))
+            objects_copy[node] = objects_copy[node].drop(columns = ['geometry'], axis=1)
+            data[node].x = torch.from_numpy(objects_copy[node].to_numpy().astype(np.float32))
+                
+        # Insert edges
+        for key, arr in self.edge_store.items():
+            splitted = key.split('_')
+            if 'rev' in key:
+                data[splitted[0], 'rev_to', splitted[-1]].edge_index = torch.from_numpy(arr).to(torch.int64)
+            else:
+                data[splitted[0], 'to', splitted[2]].edge_index = torch.from_numpy(arr).to(torch.int64)
+
+        if target_value:
+            data[target_col].y = torch.from_numpy(np.array(target_value))
+        else:
+            data[target_col].y = torch.from_numpy(np.array(np.random.randint(0,5,len(objects_copy[target_col]))))
+
+        data = T.AddSelfLoops()(data)
+        data = T.NormalizeFeatures()(data)
+
+        return data
 
     def to_dgl():
         pass

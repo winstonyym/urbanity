@@ -26,6 +26,7 @@ from urbanity.geom import buffer_polygon
 
 # import package functions and classes
 from .utils import get_population_data_links, get_available_pop_countries
+from .satellite import get_affine_transform
 
 def get_ghs_population_data(bounding_poly, 
                             bandwidth=100, 
@@ -546,6 +547,14 @@ def split_raster_into_grids(raster):
 def subset_raster_from_coords(gdf, xarray, yarray, safety_value, raster_category, raster_values, category):
     xmin, ymin, xmax, ymax = gdf.iloc[[category]].total_bounds
 
+    transform = get_affine_transform(gdf, raster_values)
+
+    # ------------------------------------------------------------------
+    # 3. Work out target shape and transform
+    # ------------------------------------------------------------------
+    if raster_values.ndim == 3:            # (bands, rows, cols)
+        raster_values = raster_values[:,:,0]
+
     # Get raster offsets, width, and height
     list_x_range = [i for i in list(xarray) if i >= xmin-safety_value if i <=xmax+safety_value]
     list_y_range = [i for i in list(yarray) if i >= ymin-safety_value if i <=ymax+safety_value]
@@ -554,10 +563,10 @@ def subset_raster_from_coords(gdf, xarray, yarray, safety_value, raster_category
     x_off = np.where(xarray == list_x_range[0])[0].item()
     y_off = np.where(yarray == list_y_range[0])[0].item()
 
-    raster_values_subset = raster_values[0][y_off:(y_off+y_width), x_off:(x_off+x_width)]
+    raster_values_subset = raster_values[y_off:(y_off+y_width), x_off:(x_off+x_width)]
     raster_category_subset = raster_category[y_off:(y_off+y_width), x_off:(x_off+x_width)]
 
-    if (raster_category_subset.shape[0] > 50000) or (raster_category_subset.shape[1] > 50000):
+    if (raster_category_subset.shape[0] > 10000) or (raster_category_subset.shape[1] > 10000):
         print('Splitting large subset into sections.')
 
         raster_category_splits = split_raster_into_grids(raster_category_subset)
@@ -595,17 +604,19 @@ def subset_raster_from_coords(gdf, xarray, yarray, safety_value, raster_category
     return average, stdev, skewness, kurtosisness
 
 
-def mask_raster_with_gdf_large_raster(gdf, raster, meta, tile_size=512):
+def mask_raster_with_gdf_large_raster(gdf, raster, tile_size=512):
     gdf_proj = gdf.copy()
 
-    # Check and reproject the GeoDataFrame if needed
-    if gdf.crs != meta['crs']:
-        gdf_proj = gdf_proj.to_crs(meta['crs'])
+    gdf_proj = gdf_proj.to_crs('epsg:4326')
+
+    if raster.ndim == 3:
+        raster = raster[:,:,0]
 
     # Prepare output raster
-    output_shape = raster[0].shape
+    output_shape = raster.shape
     output_raster = np.full(output_shape, fill_value=-1, dtype=np.int32)
 
+    transform = get_affine_transform(gdf, raster)
     # Iterate over the raster in tiles
     for row in range(0, output_shape[0], tile_size):
         for col in range(0, output_shape[1], tile_size):
@@ -615,15 +626,12 @@ def mask_raster_with_gdf_large_raster(gdf, raster, meta, tile_size=512):
             col_min = col
             col_max = min(col + tile_size, output_shape[1])
 
-            # Define the transform for the current tile
-            transform = meta['transform'] * rasterio.Affine.translation(col_min, row_min)
-
             # Create a bounding box polygon for the current tile
             tile_bounds = box(
-                meta['transform'][2] + col_min * meta['transform'][0],
-                meta['transform'][5] + row_min * meta['transform'][4],
-                meta['transform'][2] + col_max * meta['transform'][0],
-                meta['transform'][5] + row_max * meta['transform'][4]
+                transform[2] + col_min * transform[0],
+                transform[5] + row_min * transform[4],
+                transform[2] + col_max * transform[0],
+                transform[5] + row_max * transform[4]
             )
 
             # Select geometries that intersect with the current tile
@@ -651,7 +659,7 @@ def mask_raster_with_gdf_large_raster(gdf, raster, meta, tile_size=512):
         'canopy_kurtosis':{}
     }
 
-    if (raster[0].shape[0] > 50000) or (raster[0].shape[1] > 50000):
+    if (raster[0].shape[0] > 10000) or (raster[0].shape[1] > 10000):
         print('Large raster: using raster subset')
         xarray = np.linspace(gdf.total_bounds[0], gdf.total_bounds[2],raster[0].shape[1]+1)
         yarray = np.linspace(gdf.total_bounds[3], gdf.total_bounds[1],raster[0].shape[0]+1)
@@ -668,13 +676,13 @@ def mask_raster_with_gdf_large_raster(gdf, raster, meta, tile_size=512):
     else:
         for category in gdf_proj.index:
             mask = (output_raster == category)
-            average = raster[0][mask].mean() 
+            average = raster[mask].mean() 
             statistics['canopy_mean'][category] = average
-            stdev = raster[0][mask].std() 
+            stdev = raster[mask].std() 
             statistics['canopy_stdev'][category] = stdev
-            skewness = skew(raster[0][mask])
+            skewness = skew(raster[mask])
             statistics['canopy_skewness'][category] = skewness
-            kurtosisness = kurtosis(raster[0][mask])
+            kurtosisness = kurtosis(raster[mask])
             statistics['canopy_kurtosis'][category] = kurtosisness
 
     canopy_df = pd.DataFrame.from_dict({k:v for k,v in statistics.items()})
@@ -683,20 +691,23 @@ def mask_raster_with_gdf_large_raster(gdf, raster, meta, tile_size=512):
     return canopy_df
 
 
-def mask_raster_with_gdf(gdf, raster, meta):
+def mask_raster_with_gdf(gdf, raster):
     gdf_proj = gdf.copy()
+    gdf_proj = gdf_proj.to_crs('epsg:4326')
 
-    if gdf.crs != meta['crs']:
-        gdf_proj = gdf.copy()
-        gdf_proj = gdf_proj.to_crs(meta['crs'])
+    transform = get_affine_transform(gdf, raster)
 
+    if raster.ndim == 3:            # (bands, rows, cols)
+        raster = raster[:,:,0]
+    
     # Raster stats
     geom = gdf_proj[['geometry','plot_id']].values.tolist()
 
     fields_rasterized = features.rasterize(geom, 
-                                       out_shape=raster[0].shape, 
-                                       transform=meta['transform'],
-                                       fill=-1)
+                                       out_shape=raster.shape, 
+                                       transform=transform,
+                                       fill=-1,
+                                       dtype=np.int32)
 
     # Dictionary to store the average values for each category
     statistics = {
@@ -706,10 +717,10 @@ def mask_raster_with_gdf(gdf, raster, meta):
         'canopy_kurtosis':{}
     }
 
-    if (raster[0].shape[0] > 50000) or (raster[0].shape[1] > 50000):
+    if (raster.shape[0] > 10000) or (raster.shape[1] > 10000):
         print('Large raster: using raster subset')
-        xarray = np.linspace(gdf.total_bounds[0], gdf.total_bounds[2],raster[0].shape[1]+1)
-        yarray = np.linspace(gdf.total_bounds[3], gdf.total_bounds[1],raster[0].shape[0]+1)
+        xarray = np.linspace(gdf.total_bounds[0], gdf.total_bounds[2],raster.shape[1]+1)
+        yarray = np.linspace(gdf.total_bounds[3], gdf.total_bounds[1],raster.shape[0]+1)
         safety_value = 0.001
 
         # Calculate the average for each category
@@ -723,13 +734,13 @@ def mask_raster_with_gdf(gdf, raster, meta):
     else:
         for category in gdf_proj.index:
             mask = (fields_rasterized == category)
-            average = raster[0][mask].mean() 
+            average = raster[mask].mean() 
             statistics['canopy_mean'][category] = average
-            stdev = raster[0][mask].std() 
+            stdev = raster[mask].std() 
             statistics['canopy_stdev'][category] = stdev
-            skewness = skew(raster[0][mask])
+            skewness = skew(raster[mask])
             statistics['canopy_skewness'][category] = skewness
-            kurtosisness = kurtosis(raster[0][mask])
+            kurtosisness = kurtosis(raster[mask])
             statistics['canopy_kurtosis'][category] = kurtosisness
 
     canopy_df = pd.DataFrame.from_dict({k:v for k,v in statistics.items()})

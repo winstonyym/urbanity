@@ -78,6 +78,7 @@ class Map(ipyleaflet.Map):
         self.svi = None
         self.pois = None
         self.urban_plots = None
+        self.plot_geom = None
         self.objects = None
         self.connections = None
 
@@ -3090,7 +3091,12 @@ class Map(ipyleaflet.Map):
         if self.network:
             print('Network data found, skipping re-computation')
             G_buff_trunc_loop, nodes, edges = self.network[0], self.network[1], self.network[2]
-        
+            original_bbox = self.polygon_bounds.geometry[0]
+            buffered_tp = self.polygon_bounds.copy()
+            buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+            buffered_bbox = buffered_tp.geometry.values[0]
+            './data/'
+            osm = pyrosm.OSM('./data/temp.osm.pbf', bounding_box=buffered_bbox)
         else:
             if network_filepath == '':
                 try:
@@ -3276,7 +3282,7 @@ class Map(ipyleaflet.Map):
         # Compute and add building attributes.
         if self.buildings is not None: 
             print('Building data found, skipping re-computation.')
-            building_polygon = self.buildings
+            buildings = self.buildings
 
         else:
             if building_filepath != '':
@@ -3426,79 +3432,86 @@ class Map(ipyleaflet.Map):
 
                 get_and_combine_tiles(tiles_gdf_proj, building_chips, './satellite_data/', './building_satellite/')
 
-
         if self.urban_plots is not None:
             print('Urban plots data found, skipping re-computation.')
             urban_plots = self.urban_plots
 
         else:
-            # Obtain urban plots
-            original_bbox = self.polygon_bounds.geometry[0]
-            buffered_tp = self.polygon_bounds.copy()
-            buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=0)
-            proj_boundary = project_gdf(buffered_tp)
-            proj_boundary = proj_boundary.to_crs(proj_edges.crs)
+            proj_nodes = project_gdf(self.network[1])
+            proj_edges = self.network[2].to_crs(proj_nodes.crs)
 
-            # Create expanded buffer (buffer bandwidth)
-            proj_boundary_expanded = proj_boundary.copy()
-            proj_boundary_expanded['geometry'] = proj_boundary.buffer(10)
-     
-            # Get inner and out edges
-            outside_edges_proj = proj_edges.overlay(proj_boundary_expanded, how='difference')
-            inside_edges_proj = proj_edges[~proj_edges['street_id'].isin(list(outside_edges_proj['street_id']))]
+            if self.plot_geom is not None:
+                print('Urban plots data found, skipping re-computation.')
+                urban_plots = self.plot_geom
+            else:
+                # Obtain urban plots
 
-            # Group linestring with street_id
-            linestrings_with_attributes = [(linestring, street_id) for linestring, street_id in zip(inside_edges_proj.geometry, inside_edges_proj['street_id'])]
-            clipped_lines = gpd.clip(inside_edges_proj, proj_boundary)
+                original_bbox = self.polygon_bounds.geometry[0]
+                buffered_tp = self.polygon_bounds.copy()
+                buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=0)
+                proj_boundary = project_gdf(buffered_tp)
+                proj_boundary = proj_boundary.to_crs(proj_edges.crs)
 
-            tolerance = 1
-            
-            inside_edges_proj = inside_edges_proj.copy()
-            inside_edges_proj['geometry'] = clipped_lines['geometry'].apply(
-                lambda line: snap(line, proj_boundary.geometry, tolerance)
-            )[0]
-            
-            # Polygonize linestrings
-            merged_linestrings = unary_union(pd.concat([inside_edges_proj.geometry, proj_boundary.boundary.geometry]))
-            polygons = list(polygonize(merged_linestrings))
+                # Create expanded buffer (buffer bandwidth)
+                proj_boundary_expanded = proj_boundary.copy()
+                proj_boundary_expanded['geometry'] = proj_boundary.buffer(10)
+        
+                # Get inner and out edges
+                outside_edges_proj = proj_edges.overlay(proj_boundary_expanded, how='difference')
+                inside_edges_proj = proj_edges[~proj_edges['street_id'].isin(list(outside_edges_proj['street_id']))]
 
-            # Create urban plots
-            urban_plots = gpd.GeoDataFrame(data={'plot_id': range(len(polygons))}, crs=proj_edges.crs, geometry = polygons)
+                # Group linestring with street_id
+                linestrings_with_attributes = [(linestring, street_id) for linestring, street_id in zip(inside_edges_proj.geometry, inside_edges_proj['street_id'])]
+                clipped_lines = gpd.clip(inside_edges_proj, proj_boundary)
 
-            # Generate geodataframe of lines and street_id
-            urban_lines = gpd.GeoDataFrame(data=[k[1] for k in linestrings_with_attributes], crs = proj_edges.crs, geometry=[k[0] for k in linestrings_with_attributes])
-            urban_lines.columns = ['street_id', 'geometry']
-            urban_lines['street_id'] = urban_lines['street_id'].astype(int)
+                tolerance = 1
+                
+                inside_edges_proj = inside_edges_proj.copy()
+                inside_edges_proj['geometry'] = clipped_lines['geometry'].apply(
+                    lambda line: snap(line, proj_boundary.geometry, tolerance)
+                )[0]
+                
+                # Polygonize linestrings
+                merged_linestrings = unary_union(pd.concat([inside_edges_proj.geometry, proj_boundary.boundary.geometry]))
+                polygons = list(polygonize(merged_linestrings))
 
-            # 1) Spatial join on 'intersects' (or nearest if you must handle near matches)
-            joined = gpd.sjoin(urban_lines, urban_plots, how='right', predicate='intersects')
+                # Create urban plots
+                urban_plots = gpd.GeoDataFrame(data={'plot_id': range(len(polygons))}, crs=proj_edges.crs, geometry = polygons)
 
-            # 2) Compute intersection for each line‐polygon pair
-            urban_plots = urban_plots.rename_geometry("plot_geom")   # so we do not lose it in sjoin
-            joined = gpd.sjoin(urban_lines, urban_plots, how='inner', predicate='intersects')
+                # Generate geodataframe of lines and street_id
+                urban_lines = gpd.GeoDataFrame(data=[k[1] for k in linestrings_with_attributes], crs = proj_edges.crs, geometry=[k[0] for k in linestrings_with_attributes])
+                urban_lines.columns = ['street_id', 'geometry']
+                urban_lines['street_id'] = urban_lines['street_id'].astype(int)
 
-            # If the default geometry in 'joined' is from urban_lines, we can pull the polygon geometry from matched rows:
-            joined = joined.merge(urban_plots[['plot_id','plot_geom']], on='plot_id', how='left')
+                # 1) Spatial join on 'intersects' (or nearest if you must handle near matches)
+                joined = gpd.sjoin(urban_lines, urban_plots, how='right', predicate='intersects')
 
-            # Compute the intersection as a new column
-            joined['intersection'] = joined.apply(
-                lambda row: row.geometry.intersection(row.plot_geom), 
-                axis=1
-            )
+                # 2) Compute intersection for each line‐polygon pair
+                urban_plots = urban_plots.rename_geometry("plot_geom")   # so we do not lose it in sjoin
+                joined = gpd.sjoin(urban_lines, urban_plots, how='inner', predicate='intersects')
 
-            # 3) Keep only intersections whose geometry is a (Multi)LineString with > 0 length
-            def is_nonpoint_line(geom):
-                return (
-                    geom.geom_type in ['LineString', 'MultiLineString'] 
-                    and geom.length > 0
+                # If the default geometry in 'joined' is from urban_lines, we can pull the polygon geometry from matched rows:
+                joined = joined.merge(urban_plots[['plot_id','plot_geom']], on='plot_id', how='left')
+
+                # Compute the intersection as a new column
+                joined['intersection'] = joined.apply(
+                    lambda row: row.geometry.intersection(row.plot_geom), 
+                    axis=1
                 )
 
-            joined = joined[joined['intersection'].apply(is_nonpoint_line)]
-            joined = joined.groupby('plot_id')['street_id'].unique()
+                # 3) Keep only intersections whose geometry is a (Multi)LineString with > 0 length
+                def is_nonpoint_line(geom):
+                    return (
+                        geom.geom_type in ['LineString', 'MultiLineString'] 
+                        and geom.length > 0
+                    )
 
-            urban_plots = urban_plots.merge(joined, how='left', on='plot_id')
+                joined = joined[joined['intersection'].apply(is_nonpoint_line)]
+                joined = joined.groupby('plot_id')['street_id'].unique()
 
-
+                urban_plots = urban_plots.merge(joined, how='left', on='plot_id')
+                urban_plots = urban_plots.rename_geometry("geometry")
+                self.plot_geom = urban_plots
             # If you need them grouped by polygon:
 
             print(f'Urban plots constructed. Time taken: {round(time.time() - start)}.')
@@ -3513,7 +3526,7 @@ class Map(ipyleaflet.Map):
 
             bounding_polygon = self.polygon_bounds.to_crs(proj_edges.crs)
             urban_plots = urban_plots.overlay(bounding_polygon)
-            
+
             urban_plots = urban_plots.to_crs('EPSG:4326')
 
             if canopy_filepath != '':
@@ -3526,9 +3539,9 @@ class Map(ipyleaflet.Map):
                 self.canopy_meta = meta
 
                 if (mosaic[0].shape[0] >100000) or (mosaic[0].shape[1] >100000):
-                    canopy_df = mask_raster_with_gdf_large_raster(urban_plots, mosaic, meta)
+                    canopy_df = mask_raster_with_gdf_large_raster(urban_plots, mosaic)
                 else:
-                    canopy_df = mask_raster_with_gdf(urban_plots, mosaic, meta)
+                    canopy_df = mask_raster_with_gdf(urban_plots, mosaic)
                 canopy_df = canopy_df[['canopy_mean', 'canopy_stdev', 'canopy_skewness', 'canopy_kurtosis', 'plot_id']]
                 urban_plots = urban_plots.merge(canopy_df, on='plot_id', how='left')
                 urban_plots[canopy_vars] = urban_plots[canopy_vars].fillna(0)
@@ -3539,6 +3552,7 @@ class Map(ipyleaflet.Map):
             building_urban_plots_intersection = buildings.overlay(urban_plots)
             urban_plots['bid'] = building_urban_plots_intersection.groupby('plot_id')[['index']].aggregate(lambda x: list(x))
             urban_plots['bid'] = urban_plots['bid'].fillna(0)
+
             # urban_plots['plot_building_count'] = urban_plots['index'].apply(lambda x: len(x) if x !=0 else 0)
             
             # attr_cols = ['bid_area', 'bid_perimeter', 'bid_circ_compact', 'bid_convexity', 'bid_corners', 'bid_elongation',
@@ -3667,26 +3681,32 @@ class Map(ipyleaflet.Map):
                     
                     try:
                         raster_gdf = gee_layer_from_boundary(self.polygon_bounds, layer, band='', index=0)
-                        raster_gdf.columns = [layer_name, 'geometry']
                     except EEException:
                         ee.Authenticate()
                         ee.Initialize()
                         raster_gdf = gee_layer_from_boundary(self.polygon_bounds, layer, band='', index=0)
-                        raster_gdf.columns = [layer_name, 'geometry']
 
-                    urban_plots = merge_raster_to_gdf(raster_gdf, urban_plots, id_col = 'plot_id', raster_col=layer_name, method=method)
+                    if isinstance(raster_gdf, np.ndarray):
+                        raster_df = mask_raster_with_gdf(urban_plots, raster_gdf)
+                        raster_df = raster_df[['canopy_mean', 'canopy_stdev', 'canopy_skewness', 'canopy_kurtosis', 'plot_id']]
+                        urban_plots = urban_plots.merge(raster_df, on='plot_id', how='left')
+                        urban_plots[['canopy_mean', 'canopy_stdev', 'canopy_skewness', 'canopy_kurtosis']] = urban_plots[['canopy_mean', 'canopy_stdev', 'canopy_skewness', 'canopy_kurtosis']].fillna(0)
+
+                    else:
+                        raster_gdf.columns = [layer_name, 'geometry']
+                        urban_plots = merge_raster_to_gdf(raster_gdf, urban_plots, id_col = 'plot_id', raster_col=layer_name, method=method)
 
             if add_lcz:
                 print('Adding local climate zone categories to plots...')
                 try:
-                    lcz_array_gdf = gee_layer_from_boundary(self.polygon_bounds, 'RUB/RUBCLIM/LCZ/global_lcz_map/latest', band='', index=0)
-                    lcz_array_gdf.columns = ['lcz', 'geometry']
+                    lcz_array_gdf = gee_layer_from_boundary(self.polygon_bounds, 'RUB/RUBCLIM/LCZ/global_lcz_map/latest', band='', index=0, large=False)
+
                 except EEException:
                     ee.Authenticate()
                     ee.Initialize()
-                    lcz_array_gdf = gee_layer_from_boundary(self.polygon_bounds, 'RUB/RUBCLIM/LCZ/global_lcz_map/latest', band='', index=0)
-                    lcz_array_gdf.columns = ['lcz', 'geometry']
-
+                    lcz_array_gdf = gee_layer_from_boundary(self.polygon_bounds, 'RUB/RUBCLIM/LCZ/global_lcz_map/latest', band='', index=0, large=False)
+                
+                lcz_array_gdf.columns = ['lcz', 'geometry']
                 urban_plots = merge_raster_to_gdf(lcz_array_gdf, urban_plots, id_col = 'plot_id', raster_col='lcz', num_classes = 18, method='proportion')
 
             # Add population
