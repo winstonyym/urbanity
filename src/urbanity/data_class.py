@@ -25,7 +25,7 @@ class UrbanGraph:
     street: gpd.GeoDataFrame = field(default_factory=lambda: gpd.GeoDataFrame())
     intersection: gpd.GeoDataFrame = field(default_factory=lambda: gpd.GeoDataFrame())
 
-    boundary_to_plot: np.ndarray = np.array('None')
+    boundary_to_plot: np.ndarray = field(default_factory=lambda: np.array('None'))
     plot_to_boundary: np.ndarray = None
     plot_to_plot: np.ndarray = None
     building_to_building: np.ndarray = None

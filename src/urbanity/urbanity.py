@@ -3375,6 +3375,7 @@ class Map(ipyleaflet.Map):
                 if len(overlapping_grid) == 1:
                     row, col = overlapping_grid['row'].values.item(), overlapping_grid['col'].values.item()
                     target_key = f"R{row}C{col}.parquet"
+
                     buildings = get_and_assign_building_heights(building_height_links[target_key], target_key, buildings)
 
                 elif len(overlapping_grid) > 1: 

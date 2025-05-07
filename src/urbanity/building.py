@@ -963,6 +963,67 @@ def _calc(geom):
 
     Returns:
         float: Mean angle deviation.
+    """
+    
+    
+    angles = []
+    points = list(geom.exterior.coords)  # get points of a shape
+    n_points = len(points)
+
+    if n_points < 3:
+        return np.nan
+
+    stop = n_points - 1
+
+    i = 1
+    while i < n_points:
+        a = np.asarray(points[i - 1])
+        b = np.asarray(points[i])
+        c = np.asarray(points[i + 1]) if i != stop else np.asarray(points[1])
+
+        ang = _angle(a, b, c)
+
+        if np.isnan(ang):
+            # If angle is NaN, remove duplicate points and restart
+            points = remove_duplicate_points(points)
+            n_points = len(points)
+            if n_points < 3:
+                return np.nan
+            stop = n_points - 1
+            i = 0  # restart iteration
+            angles = []  # reset angles
+            continue
+
+        if ang <= 175 or ang >= 185:
+            angles.append(ang)
+
+        i += 1  # increment index normally
+
+    if not angles:
+        return np.nan  # if no valid angles were found
+
+    deviations = [abs(90 - i) for i in angles]
+    return np.mean(deviations)
+
+def remove_duplicate_points(points):
+        """Remove globally duplicated points but keep one occurrence."""
+        seen = set()
+        cleaned = []
+        for pt in points:
+            key = tuple(np.round(pt, decimals=8))  # rounding to avoid floating point issues
+            if key not in seen:
+                seen.add(key)
+                cleaned.append(pt)
+        return cleaned
+
+def _calc(geom):
+    """Helper function to calculate the angle of deviation between points.
+
+    Args:
+        geom (shapely.geometry.Polygon): Shapely polygon input.
+
+    Returns:
+        float: Mean angle deviation.
     """    
     angles = []
     points = list(geom.exterior.coords)  # get points of a shape
@@ -978,12 +1039,38 @@ def _calc(geom):
         # in last case, needs to wrap around start to find finishing angle
         c = np.asarray(points[i + 1]) if i != stop else np.asarray(points[1])
         ang = _angle(a, b, c)
+
         if ang <= 175 or ang >= 185:
             angles.append(ang)
         else:
             continue
     deviations = [abs(90 - i) for i in angles]
-    return np.mean(deviations)
+    mean_deviations = np.mean(deviations)
+
+    if np.isnan(mean_deviations):
+        angles = []
+        points = remove_duplicate_points(points)
+        n_points = len(points)
+        if n_points < 3:
+            return np.nan
+        stop = n_points - 1
+        for i in range(
+            1, n_points
+        ):  # for every point, calculate angle and add 1 if True angle
+            a = np.asarray(points[i - 1])
+            b = np.asarray(points[i])
+            # in last case, needs to wrap around start to find finishing angle
+            c = np.asarray(points[i + 1]) if i != stop else np.asarray(points[1])
+            ang = _angle(a, b, c)
+
+            if ang <= 175 or ang >= 185:
+                angles.append(ang)
+            else:
+                continue
+        deviations = [abs(90 - i) for i in angles]
+        mean_deviations = np.mean(deviations)
+        return mean_deviations
+    return mean_deviations
 
 def get_building_heights(filepath, target_key):
     dest_crs = 'epsg:3857'

@@ -670,7 +670,7 @@ def tiled_large_array(boundary, layer_name, delta=0.1, band='', index=0):
     """
     array_list = []
 
-    tiles = split_bbox_into_grid(boundary, n=16)
+    tiles = split_bbox_into_grid(boundary, n=64)
 
     for i in range(len(tiles)):
         current_row = tiles.iloc[[i]]
@@ -739,7 +739,7 @@ def gee_layer_from_boundary(boundary, layer_name, delta=0.1, band='', index=0, l
         GeoDataFrame with columns ['value'] and the polygon geometry of each pixel.
     """
     # Toggle tiling mechanism if area is large and want to use large
-    if (boundary.geometry.area.values > 0.2) and large:
+    if (boundary.geometry.area.values > 0.1) and large:
         large=True
     else:
         large=False
