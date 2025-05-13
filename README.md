@@ -18,19 +18,16 @@
 
 **Urbanity** is a network-based Python package developed at the [NUS Urban Analytics Lab](https://ual.sg/data-code/) to automate the construction of feature rich (contextual and semantic) urban networks at any geographical scale. Through an accessible and simple to use interface, users can request heterogeneous urban information such as street view imagery, building morphology, population (including sub-group), and points of interest for target areas of interest.
 
-### Use cases
-One popular use case for **Urbanity** is for graph machine learning on urban networks. These tasks are consistent with GraphML literature and include node level, edge level, and graph level predictive tasks. 
-
-- [Road network classification](https://urbanity.readthedocs.io/en/latest/notebooks/transductive_graph_ml.html)
-- [Building operating energy prediction](https://github.com/winstonyym/open-building-energy-prediction)
-
-Questions concerning use cases can be directed to the author: winstonyym@u.nus.edu
-</br>
-
 <p align="center">
     <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/citynetworks.png" width = 1000% alt="Logo">
   <h5 align="center">Network of cities around the world</h5>
 </p>
+
+## Tutorials
+#### Generate Feature Rich Urban Networks [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1K-6DlBbuQX48WVsxpwAymgLlibPOJHME?usp=sharing)
+
+#### Generate Graph ML Ready Graphs [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Ku59UETn-VhuMJEVUz0fYaYlCdPpTuda?usp=sharing)
+
 
 ## Features
 
@@ -49,7 +46,6 @@ Towards exploring complexities underlying urban systems and facilitating compara
 
 ## Quickstart
 
-_How do I install Urbanity?_
 
 Urbanity is built on several geospatial packages (e.g., GeoPandas, ipyleaflet, rasterio, etc.,) that are best compiled through conda-forge. For seamless installation, we provide an environment.yml file for users to create their own conda environment. Please follow the steps below to ensure proper installation:
 
@@ -61,6 +57,7 @@ Urbanity is built on several geospatial packages (e.g., GeoPandas, ipyleaflet, r
 $ chmod +x ./setup.sh
 $ ./setup.sh
 ```
+
 ## Urbanity includes optional integration with external APIs
 ### **Google Earth Engine**
 
@@ -113,6 +110,16 @@ $ jupyter lab
 We demonstrate how you can conduct a diverse range of urban analytical tasks (such as graph machine learning, network assortativity analysis, and benchmarking across cities) with Urbanity. Check out the documentation and examples/tutorials in the documentation site [examples](https://urbanity.readthedocs.io/en/latest/).
 
 Sample dataset and notebooks to follow examples can be accessed at this [repository](https://github.com/winstonyym/urbanity_examples).
+
+### Use cases
+One popular use case for **Urbanity** is for graph machine learning on urban networks. These tasks are consistent with GraphML literature and include node level, edge level, and graph level predictive tasks. 
+
+- [Road network classification](https://urbanity.readthedocs.io/en/latest/notebooks/transductive_graph_ml.html)
+- [Building operating energy prediction](https://github.com/winstonyym/open-building-energy-prediction)
+
+Questions concerning use cases can be directed to the author: winstonyym@u.nus.edu
+</br>
+
 
 ## Citation
 
