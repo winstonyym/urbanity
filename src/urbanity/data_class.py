@@ -346,9 +346,9 @@ class UrbanGraph:
         for key, arr in self.edge_store.items():
             splitted = key.split('_')
             if 'rev' in key:
-                data[splitted[0], 'rev_to', splitted[-1]].edge_index = torch.from_numpy(arr).to(torch.int64)
+                data[splitted[0], 'rev_to', splitted[-1]].edge_index = torch.from_numpy(arr.copy()).to(torch.int64)
             else:
-                data[splitted[0], 'to', splitted[2]].edge_index = torch.from_numpy(arr).to(torch.int64)
+                data[splitted[0], 'to', splitted[2]].edge_index = torch.from_numpy(arr.copy()).to(torch.int64)
 
         if target_value:
             data[target_col].y = torch.from_numpy(np.array(target_value))

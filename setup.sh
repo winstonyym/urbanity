@@ -62,9 +62,7 @@ setup_conda_env () {
     mamba install -c conda-forge -y networkit
     mamba install -c conda-forge -y h5py
     mamba install -c conda-forge -y geemap
-    
-    # SVI workflow
-    python -m pip install osmium
+
     
     # ── 4. install backend ─────────────────────────────────────────────
     echo "Installing backend '$BACKEND' (Device: $GPU_TYPE)"

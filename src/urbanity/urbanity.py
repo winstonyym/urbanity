@@ -1,5 +1,4 @@
 # import base packages
-
 import warnings
 # Catch known warnings from shapely and geopandas
 from shapely.errors import ShapelyDeprecationWarning
@@ -8,9 +7,6 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 
-from dotenv import load_dotenv
-
-from ipaddress import collapse_addresses
 import os
 import ee
 import json
@@ -19,9 +15,8 @@ import math
 import glob
 import requests
 import subprocess
-from unittest import skip
 import pkg_resources
-from webbrowser import get
+from dotenv import load_dotenv
 
 # import external functions and classes
 import networkit
@@ -29,16 +24,20 @@ import numpy as np
 import networkx as nx
 import pandas as pd
 import geopandas as gpd
-from shapely.geometry import Polygon, box, LineString
-from shapely.ops import unary_union, polygonize, split, snap
+from shapely.geometry import Polygon, box
+from shapely.ops import unary_union, polygonize, snap
+
 import ipyleaflet
-from ipyleaflet import basemaps, basemap_to_tiles, Icon, Marker, LayersControl, LayerGroup, DrawControl, FullScreenControl, ScaleControl, LocalTileLayer, GeoData
+from ipyleaflet import basemaps, basemap_to_tiles, Icon, Marker, LayersControl, \
+                       LayerGroup, DrawControl, FullScreenControl, ScaleControl, LocalTileLayer, GeoData
+
 import pyrosm
 from pyrosm import get_data
 from scipy.stats import entropy
 
 # import module functions and classes
-from .utils import get_country_centroids, finetune_poi, get_available_precomputed_network_data, most_frequent, gdf_to_poly
+from .utils import get_country_centroids, finetune_poi, \
+                   get_available_precomputed_network_data, most_frequent, gdf_to_poly
 from .geom import *
 from .building import *
 from .population import get_meta_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, load_npz_as_raster, mask_raster_with_gdf, \

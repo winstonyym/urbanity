@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "urbanity"
 version = "0.5.10"
-description = ""
+description = "A python package to generate urban graphs for any geographical location and scale"
 authors = ["winstonyym <winstonyym@u.nus.edu>"]
 license = "MIT"
 
