@@ -31,7 +31,6 @@ fi
 
 # ────────── helper: create & configure conda env ──────────
 setup_conda_env () {
-
     # 2. (Optional) remove old environment if present
     conda env remove -n "$CONDA_ENV" -y || true
 
@@ -48,22 +47,26 @@ setup_conda_env () {
     # Install packages
     conda install mamba -c conda-forge -y
     mamba install geopandas -y
-
     python -m pip install uv
     
     uv pip install urbanity==$PKG_VERSION
     # 5. Uninstall pip version of networkit (if it exists)
-    uv pip uninstall -y networkit || true
+    mamba install -c conda-forge -y networkit
 
     uv pip install setuptools==68
     uv pip install rasterio==1.4.0
-    mamba install -c conda-forge -y ipyleaflet 
-    mamba install -c conda-forge -y jupyter 
+    # mamba install -c conda-forge -y ipyleaflet 
+    # mamba install -c conda-forge -y jupyter 
+    conda activate "$CONDA_ENV"
     mamba install -c conda-forge -y pyarrow
-    mamba install -c conda-forge -y networkit
+
+    conda activate "$CONDA_ENV"
     mamba install -c conda-forge -y geemap
+
+    conda activate "$CONDA_ENV"
     mamba install -c conda-forge -y osmium-tool
     
+    conda activate "$CONDA_ENV"
     # ── 4. install backend ─────────────────────────────────────────────
     echo "Installing backend '$BACKEND' (Device: $GPU_TYPE)"
 
@@ -87,9 +90,9 @@ setup_conda_env () {
     dgl)
         if [[ $GPU_TYPE == "cuda" ]]; then
             # pick the CUDA build that matches your driver / toolkit
-            uv install dgl-cu121            # change cuXYZ if needed
+            uv pip install dgl-cu121            # change cuXYZ if needed
         else
-            uv install dgl                  # CPU‑only or ROCm build
+            uv pip install dgl                  # CPU‑only or ROCm build
         fi
         ;;
 
@@ -103,9 +106,6 @@ setup_conda_env () {
         ;;
     esac
 
-  # 5. misc (common) extras
-  uv pip install transformers vt2geojson
-  mamba install -y opencv -c conda-forge
 }
 
 # ────────── OS detection (unchanged) ──────────
