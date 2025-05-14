@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 import geopandas as gpd
 import pandas as pd
 import numpy as np
-import h5py
 import pickle
 import torch
 from .utils import get_plot_to_plot_edges, get_building_to_street_edges, get_edge_nodes, get_building_to_building_edges, \

@@ -1,7 +1,6 @@
 # Map class utility functions
 import os
 import io
-import h5py
 import json
 import pandas as pd
 import pkg_resources
