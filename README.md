@@ -30,13 +30,19 @@
 
 
 ## Features
-
 - Rapid city-scale network generation
 - Seamless computation of metric, topological, contextual, and semantic network indicators
 - Node and edge spatial context computation
 - Areal statistics for arbitrary urban subzones
 - Validity checks for OpenStreetMap attribute completeness (no. of buildings, percentage with height, percentage with levels, etc.)
 - Primal planar, dual, and spatial graph generation
+- Generating graph machine learning ready graphs
+
+## Global Graph Dataset
+
+To facilitate quicker access to city scale graphs, we provide a set of analysis-ready graphs for many cities with a wide set of useful urban attributes. Users can directly download these datasets and use them quickly in their workflows:
+- [Global Feature Rich Urban Networks](https://figshare.com/articles/dataset/Global_Urban_Network_Dataset/22124219)
+- [Global Urban Graph Dataset](https://figshare.com/account/articles/28852319)
 
 ## Designed for urban planners
 
