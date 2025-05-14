@@ -3,7 +3,7 @@ set -euo pipefail           # safer defaults
 set -x                      # echo commands (remove if you prefer)
 
 # ──────────────────────────────────────────────────────────────
-PKG_VERSION="0.5.10"
+PKG_VERSION="0.5.12"
 CONDA_ENV="urbanity"
 
 # ────────── argument parsing ──────────
@@ -18,7 +18,6 @@ case "${1-}" in
       echo "Unknown option '$1'. Use 'pyg', 'dgl', 'none', or omit." >&2 ; exit 1 ;;
 esac
 echo "→ Selected backend: $BACKEND"
-
 
 # Check if GPU exists
 GPU_TYPE="cpu"
@@ -109,58 +108,23 @@ setup_conda_env () {
   mamba install -y opencv -c conda-forge
 }
 
-# ────────── OS detection ──────────
-detect_ostype() {
-  # 1. Prefer Bash-provided $OSTYPE …
-  if [[ -n "${OSTYPE-}" ]]; then
-      printf '%s\n' "${OSTYPE,,}"   # ,, → lower-case
-      return
-  fi
-
-  # 2. …otherwise fall back to uname(1)
-  uname -s | tr '[:upper:]' '[:lower:]'
-}
-
-OS_ID=$(detect_ostype)
-
-# Helper: source the *right* conda activation script everywhere
-source_conda() {
-  local base
-  if ! base=$(conda info --base 2>/dev/null); then
-      echo "conda not found – please install Miniconda/Anaconda first." >&2
-      exit 1
-  fi
-  source "$base/etc/profile.d/conda.sh"
-}
-
-case "$OS_ID" in
-  linux-gnu*|linux*)
-      # Detect WSL (optional)
-      if grep -qi microsoft /proc/version 2>/dev/null ; then
-          echo "→ Running under WSL"
-      fi
+# ────────── OS detection (unchanged) ──────────
+case "$OSTYPE" in
+  linux-gnu*)
       sudo apt-get update
       sudo apt-get install -y gcc
-      source_conda
+      source "$(conda info --base)/etc/profile.d/conda.sh"
       setup_conda_env
       sudo chown -R "$USER" .
       ;;
-
-  darwin*)
-      source_conda
+  darwin*)  
+      source "$(conda info --base)/etc/profile.d/conda.sh"
+      setup_conda_env ;;
+  cygwin*|msys*)
+      source "/c/Users/$(whoami)/anaconda3/etc/profile.d/conda.sh"
       setup_conda_env
       ;;
-
-  msys*|mingw*|cygwin*|win32*)
-      # Git-Bash, MSYS2 or Cygwin
-      source_conda
-      setup_conda_env
-      ;;
-
-  *)
-      echo "Unknown OS type: $OS_ID" >&2
-      exit 1
-      ;;
+  *) echo "Unknown OS type: $OSTYPE" ; exit 1 ;;
 esac
 
 echo "🎉  Environment '$CONDA_ENV' ready (backend: $BACKEND)"
