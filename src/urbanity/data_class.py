@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import pickle
 import torch
+import requests
 from .utils import get_plot_to_plot_edges, get_building_to_street_edges, get_edge_nodes, get_building_to_building_edges, \
                    get_intersection_to_street_edges, get_buildings_in_plot_edges, get_edges_along_plot, boundary_to_plot, \
                    remove_non_numeric_columns_objects, standardise_and_scale, fill_na_in_objects, one_hot_encode_categorical
@@ -182,21 +183,30 @@ class UrbanGraph:
     def load_graph(self, filename):
         """
         Reads each .parquet and .npy file in the zip, storing them in two dictionaries.
+        Supports both local and online ZIP files.
         Returns:
             geodf_dict: dict of {filename_without_ext: GeoDataFrame}
             array_dict: dict of {filename_without_ext: numpy.ndarray}
         """
         geodf_dict = {}
         array_dict = {}
-        
-        with zipfile.ZipFile(filename, 'r') as z:
+
+        # If filename is a URL, fetch into memory
+        if isinstance(filename, str) and filename.startswith(('http://', 'https://')):
+            response = requests.get(filename)
+            response.raise_for_status()
+            zip_data = io.BytesIO(response.content)
+            zip_file = zipfile.ZipFile(zip_data, 'r')
+        else:
+            zip_file = zipfile.ZipFile(filename, 'r')
+
+        with zip_file as z:
             # List all files in the ZIP archive
             for file in z.namelist():
                 # If it's a GeoDataFrame in Parquet format
                 if file.endswith('.parquet'):
                     with z.open(file) as f:
                         gdf = gpd.read_parquet(f)
-                    # Use the filename (minus extension) as the dictionary key
                     dict_key = file.rsplit('.', 1)[0]
                     geodf_dict[dict_key] = gdf
 
@@ -211,12 +221,12 @@ class UrbanGraph:
                             geodf_dict['plot'][dict_key] = arr
                     else:
                         with z.open(file) as f:
-                            # Read the data into memory as bytes, then np.load from that
                             data = io.BytesIO(f.read())
                             arr = np.load(data, allow_pickle=True)
                         dict_key = file.rsplit('.', 1)[0]
                         array_dict[dict_key] = arr
 
+        # Assign attributes as before
         self.boundary = geodf_dict.get('boundary', None)
         self.building = geodf_dict.get('building', None)
         self.plot = geodf_dict.get('plot', None)
@@ -236,7 +246,6 @@ class UrbanGraph:
         self.street_to_plot = array_dict.get('street_to_plot', None)
         self.plot_to_street = array_dict.get('plot_to_street', None)
 
-        # Optionally re-store them:
         self.geo_store = geodf_dict if geodf_dict else None
         self.edge_store = array_dict if array_dict else None
 
