@@ -329,17 +329,48 @@ class UrbanGraph:
                                    test_ratio,
                                    random_state)
 
-    def to_pyg_graph(self, target_col = 'building', target_value = []):
+    def to_pyg_graph(self, 
+                     target_node = 'building', 
+                     categorical = False,
+                     target_value = [], 
+                     train_val_test=[0.6, 0.2, 0.2],
+                     random_seed=0
+                     ):
 
         data = HeteroData()
         objects_copy = self.geo_store.copy()
+
+        if target_value:
+            assert len(target_value) == len(objects_copy[target_node]), "Groundtruth labels do not match length of entity. Missing values should be specified as None."
 
         node_types = ['boundary', 'plot','building','street','intersection']
 
         for node in node_types:
             objects_copy[node][f'{node}_id'] = range(len(objects_copy[node]))
             objects_copy[node] = objects_copy[node].drop(columns = ['geometry'], axis=1)
-            data[node].x = torch.from_numpy(objects_copy[node].to_numpy().astype(np.float32))
+
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.compose import ColumnTransformer
+
+        scale = StandardScaler()
+
+        # Standardize data
+        cols = [i for i in objects_copy['plot'].columns if not i.startswith('lcz_')]
+        ct = ColumnTransformer([
+                ('somename', StandardScaler(), cols)
+            ], remainder='passthrough')
+        
+        # Rescale all nodes
+        objects_copy['boundary'] = scale.fit_transform(objects_copy['boundary'])
+        objects_copy['street'] = scale.fit_transform(objects_copy['street'])
+        objects_copy['intersection'] = scale.fit_transform(objects_copy['intersection'])
+        objects_copy['building'] = scale.fit_transform(objects_copy['building'])
+        objects_copy['plot'] = ct.fit_transform(objects_copy['plot'])
+
+        node_types = ['boundary', 'plot','building','street','intersection']
+
+        for node in node_types:
+            data[node].x = torch.from_numpy(objects_copy[node].astype(np.float32))
                 
         # Insert edges
         for key, arr in self.edge_store.items():
@@ -350,12 +381,64 @@ class UrbanGraph:
                 data[splitted[0], 'to', splitted[2]].edge_index = torch.from_numpy(arr.copy()).to(torch.int64)
 
         if target_value:
-            data[target_col].y = torch.from_numpy(np.array(target_value))
+            if categorical:
+                arr = np.array(target_value)
+                # 1. Find unique categories (excluding None)
+                categories = sorted(set([x for x in arr if x is not None]))
+                cat2int = {cat: idx for idx, cat in enumerate(categories)}
+
+                print(f'Using categorical mapping: {cat2int}')
+                # 2. Map array values, assign -1 to None
+                def encode(val):
+                    return cat2int.get(val, -1)
+
+                int_arr = np.array([encode(x) for x in arr])
+                data[target_node].y = torch.from_numpy(np.array(int_arr))
+            else:
+                arr = np.array(target_value)
+                arr = np.array([x if x is not None else -1 for x in arr], dtype=float)
+                data[target_node].y = torch.from_numpy(arr)
+            
         else:
-            data[target_col].y = torch.from_numpy(np.array(np.random.randint(0,5,len(objects_copy[target_col]))))
+            data[target_node].y = torch.from_numpy(np.array(np.random.randint(0,5,len(objects_copy[target_node]))))
+
+        import random
+        # Set train, validation, and test masks
+        torch.manual_seed(random_seed)
+        random.seed(random_seed)
+        np.random.seed(random_seed)
+
+        valid_indices = np.where(data[target_node].y != -1)[0]
+        np.random.shuffle(valid_indices)
+
+        # Set your desired split ratios
+        train_ratio, val_ratio, test_ratio = train_val_test
+
+        # Compute split sizes
+        train_end = int(train_ratio * len(valid_indices))
+        val_end = train_end + int(val_ratio * len(valid_indices))
+
+        # Create index splits
+        train_idx = valid_indices[:train_end]
+        val_idx = valid_indices[train_end:val_end]
+        test_idx = valid_indices[val_end:]
+
+        # Instantiate empty vector masks
+        train_mask = np.zeros(len(objects_copy[target_node])).astype(int)
+        val_mask = np.zeros(len(objects_copy[target_node])).astype(int)
+        test_mask = np.zeros(len(objects_copy[target_node])).astype(int)
+
+        # Assign 1 to entries corresponding to each index
+        np.put(train_mask, train_idx, 1)
+        np.put(val_mask, val_idx, 1)
+        np.put(test_mask, test_idx, 1)
+
+        # Insert train, val, and test masks
+        data[target_node].train_mask = torch.from_numpy(train_mask).bool()
+        data[target_node].val_mask = torch.from_numpy(val_mask).bool()
+        data[target_node].test_mask = torch.from_numpy(test_mask).bool()
 
         data = T.AddSelfLoops()(data)
-        data = T.NormalizeFeatures()(data)
 
         return data
 

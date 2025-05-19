@@ -74,15 +74,15 @@ setup_conda_env () {
     pyg)
         # ① Install the right PyTorch wheel first
         if [[ $GPU_TYPE == "cuda" ]]; then
-            uv pip install torch torchvision
+            pip3 install torch torchvision 
             WHEEL_TAG="cu121"
         else                                       # CPU fallback
-            uv pip install torch torchvision
+            pip3 install torch torchvision
             WHEEL_TAG="cpu"
         fi
 
         # ② Install the PyTorch‑Geometric stack that matches the wheel
-        PYG_URL="https://data.pyg.org/whl/torch-2.4.0+${WHEEL_TAG}.html"
+        PYG_URL="https://data.pyg.org/whl/torch-2.6.0+${WHEEL_TAG}.html"
         uv pip install torch_geometric torch_scatter torch_sparse \
                     torch_cluster torch_spline_conv -f "${PYG_URL}"
         ;;
