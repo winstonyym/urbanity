@@ -396,7 +396,7 @@ class UrbanGraph:
                 data[target_node].y = torch.from_numpy(np.array(int_arr))
             else:
                 arr = np.array(target_value)
-                arr = np.array([x if x is not None else -1 for x in arr], dtype=float)
+                arr = np.nan_to_num(arr, nan=-1)
                 data[target_node].y = torch.from_numpy(arr)
             
         else:
