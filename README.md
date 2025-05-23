@@ -28,6 +28,7 @@
 
 #### Generate Graph ML Ready Graphs [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Ku59UETn-VhuMJEVUz0fYaYlCdPpTuda?usp=sharing)
 
+#### Building Use Classification [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/13cjILL9mBmxpJ2j6O9ssTwrFqgd48KVE?usp=sharing)
 
 ## Features
 - Rapid city-scale network generation
@@ -42,7 +43,7 @@
 
 To facilitate quicker access to city scale graphs, we provide a set of analysis-ready graphs for many cities with a wide set of useful urban attributes. Users can directly download these datasets and use them quickly in their workflows:
 - [Global Feature Rich Urban Networks](https://figshare.com/articles/dataset/Global_Urban_Network_Dataset/22124219)
-- [Global Urban Graph Dataset](https://figshare.com/account/articles/28852319)
+- [Global Urban Graph Dataset](https://figshare.com/articles/dataset/Global_Graph_Dataset/28852319)
 
 ## Designed for urban planners
 
