@@ -582,7 +582,7 @@ def remove_non_numeric_columns_objects(objects, keep_geometry=False):
         if key == 'intersection':
             only_numerics = only_numerics.drop(columns = ['intersection_id', 'osmid', 'x', 'y'], axis=1)
         elif key == 'plot':
-            only_numerics = only_numerics.drop(columns = ['plot_id', 'boundary_id'], axis=1)
+            only_numerics = only_numerics.drop(columns = ['plot_id'], axis=1)
         elif key == 'building':
             only_numerics = only_numerics
         elif key == 'street':

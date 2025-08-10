@@ -16,12 +16,45 @@
 
 # Urbanity
 
-**Urbanity** is a network-based Python package developed at the [NUS Urban Analytics Lab](https://ual.sg/data-code/) to automate the construction of feature rich (contextual and semantic) urban networks at any geographical scale. Through an accessible and simple to use interface, users can request heterogeneous urban information such as street view imagery, building morphology, population (including sub-group), and points of interest for target areas of interest.
+**Urbanity** is a network and graph based Python package developed at the [NUS Urban Analytics Lab](https://ual.sg/data-code/) since 2022. Urbanity helps users to automate the construction of feature rich (contextual and semantic) urban networks and graphs at any geographical scale. Through an accessible and simple to use interface, users can build analysis ready graphs and networks for diverse urban tasks.
 
 <p align="center">
     <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/citynetworks.png" width = 1000% alt="Logo">
   <h5 align="center">Network of cities around the world</h5>
 </p>
+
+# Motivation
+Cities are under growing pressure to become both sustainable and equitable as they confront rapid urbanization and the slow-burn realities of climate change. 
+Meeting these challenges increasingly depends on data-driven insights—enabled by the explosion of large-scale geospatial data and advances in computational methods—that reveal how cities grow, function, and evolve.
+Yet our [review](https://www.sciencedirect.com/science/article/pii/S0198971522000692) finds that most modeling efforts still develop in disciplinary silos , leaving them ill-equipped to address complex, interlocking issues such as housing, transportation, and climate resilience.
+
+At the same time, graphs are ubiquitous across multiple domains from co-citation graphs to biological graphs of proteins and molecules.
+Graphs allow us a powerful way to represent diverse types of complex systems in a robust manner. 
+Building on this insight, we introduce urban graph analytics---an extension of traditional street networks---that enables more integrated and interpretable urban science.
+
+<p align="center">
+    <img src="https://raw.githubusercontent.com/winstonyym/urbanity/main/images/citygraphs.png" width = 1000% alt="Logo">
+  <h5 align="center">Graphs of cities around the world</h5>
+</p>
+
+Our [position paper](https://osf.io/abyqh/files/osfstorage/685400f9b2a1dc6e2b9f6457) describing the conceptual motivation for urban graph analytics was presented at the The 19th International Conference on Computational Urban Planning & Urban Management on 25 June 2025, UCL London.
+
+
+## What can I do with Urbanity?
+
+We demonstrate how you can conduct a diverse range of urban analytical tasks (such as graph machine learning, network assortativity analysis, and benchmarking across cities) with Urbanity. Check out the documentation and examples/tutorials in the documentation site [examples](https://urbanity.readthedocs.io/en/latest/).
+
+Sample dataset and notebooks to follow examples can be accessed at this [repository](https://github.com/winstonyym/urbanity_examples).
+
+### Use cases
+One popular use case for **Urbanity** is for graph machine learning on urban networks. These tasks are consistent with GraphML literature and include node level, edge level, and graph level predictive tasks. 
+
+- [Road network classification](https://urbanity.readthedocs.io/en/latest/notebooks/transductive_graph_ml.html)
+- [Building operating energy prediction](https://github.com/winstonyym/open-building-energy-prediction)
+
+Questions concerning use cases can be directed to the author: winstonyym@u.nus.edu
+</br>
+
 
 ## Tutorials
 #### Generate Feature Rich Urban Networks [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1K-6DlBbuQX48WVsxpwAymgLlibPOJHME?usp=sharing)
@@ -31,12 +64,13 @@
 #### Building Use Classification [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/13cjILL9mBmxpJ2j6O9ssTwrFqgd48KVE?usp=sharing)
 
 ## Features
-- Rapid city-scale network generation
+- Rapid city-scale network and graph generation
 - Seamless computation of metric, topological, contextual, and semantic network indicators
 - Node and edge spatial context computation
 - Areal statistics for arbitrary urban subzones
 - Validity checks for OpenStreetMap attribute completeness (no. of buildings, percentage with height, percentage with levels, etc.)
 - Primal planar, dual, and spatial graph generation
+- Conversion to graph machine learning ready formats
 - Generating graph machine learning ready graphs
 
 ## Global Graph Dataset
@@ -112,26 +146,12 @@ $ python -m ipykernel install --user --name=urbanity
 $ jupyter lab
 ```
 
-## What can I do with Urbanity?
-
-We demonstrate how you can conduct a diverse range of urban analytical tasks (such as graph machine learning, network assortativity analysis, and benchmarking across cities) with Urbanity. Check out the documentation and examples/tutorials in the documentation site [examples](https://urbanity.readthedocs.io/en/latest/).
-
-Sample dataset and notebooks to follow examples can be accessed at this [repository](https://github.com/winstonyym/urbanity_examples).
-
-### Use cases
-One popular use case for **Urbanity** is for graph machine learning on urban networks. These tasks are consistent with GraphML literature and include node level, edge level, and graph level predictive tasks. 
-
-- [Road network classification](https://urbanity.readthedocs.io/en/latest/notebooks/transductive_graph_ml.html)
-- [Building operating energy prediction](https://github.com/winstonyym/open-building-energy-prediction)
-
-Questions concerning use cases can be directed to the author: winstonyym@u.nus.edu
-</br>
-
-
 ## Citation
 
 If you use Urbanity in your work, please cite:
 <br></br>
+Yap, W., Biljecki, F. (2025, June). Leveraging Urban Graphs for Multi-Scalar Urban Analytics. In 19th International Conference on Computational Urban Planning & Urban Management, CUPUM 2025. https://doi.org/10.17605/OSF.IO/ABYQH
+
 Yap, W., Stouffs, R. & Biljecki, F. Urbanity: automated modelling and analysis of multidimensional networks in cities. npj Urban Sustain 3, 45 (2023). https://doi.org/10.1038/s42949-023-00125-w
 
 Yap, W., Biljecki, F. A Global Feature-Rich Network Dataset of Cities and Dashboard for Comprehensive Urban Analyses. Sci Data 10, 667 (2023). https://doi.org/10.1038/s41597-023-02578-1

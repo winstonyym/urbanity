@@ -608,7 +608,34 @@ class Map(ipyleaflet.Map):
                 origin_gdf_pop = origin_gdf_pop.rename(columns=temporal_rename)
 
             # Obtain nodes and edges within buffered polygon
-            osm = pyrosm.OSM(fp, bounding_box=buffered_bbox)
+            data_root = './data/'
+            if not os.path.exists(data_root):
+                os.makedirs(data_root)
+
+            poly_path = os.path.join(data_root, 'temp.poly')
+            osm_path = os.path.join(data_root, 'temp.osm.pbf')
+
+            if os.path.isfile(poly_path):
+                os.remove(poly_path)
+
+            if os.path.isfile(osm_path):
+                os.remove(osm_path)
+            self.polygon_bounds = self.polygon_bounds[['geometry']]
+            self.polygon_bounds = self.polygon_bounds.reset_index()
+            self.polygon_bounds.columns = ['boundary_id', 'geometry']
+
+            gdf_to_poly(self.polygon_bounds, poly_path, column='boundary_id')
+            cmd = [
+                    "osmium", "extract", 
+                    "-p", poly_path,
+                    fp,
+                    "-o", osm_path
+                ]
+
+            subprocess.run(cmd, capture_output=False, text=True)
+
+            osm = pyrosm.OSM(osm_path, bounding_box=buffered_bbox)
+
             nodes, edges = osm.get_network(network_type=network_type, nodes=True)
 
             # Build networkx graph for pre-processing
@@ -651,24 +678,40 @@ class Map(ipyleaflet.Map):
             # Fill NA and drop incomplete columns
             nodes = nodes.fillna('')
             edges = edges.fillna('')
+     
             nodes = nodes.drop(columns=['tags','timestamp','version','changeset']).reset_index(drop=True)
-            edges = edges.reset_index()[['u','v','length','geometry']]
+            highway_edges = edges.reset_index()[['u', 'v', 'highway']]
+            edges = edges.reset_index()[['u','v','length', 'geometry']]
 
             # Assign unique IDs
             nodes['intersection_id'] = nodes.index
             nodes = nodes[['intersection_id','osmid', 'x', 'y', 'geometry']]
-
+        
             edges['edge_id'] = edges.index
-            edges = edges[['edge_id', 'u', 'v', 'length','geometry']]
             
+
             temporal_network_list = []
             temporal_nodes_list = []
             if temporal_network:
+
+                # Get highway nodes
+                highway_edges['highway'] = highway_edges['highway'].astype(str).str.contains(r'\btrunk\b', 
+                                                                case=False,
+                                                                na=False).astype(int)    # don’t let NaNs ruin the mask
+
+                highway_edges = highway_edges[highway_edges['highway']==1]
+                highway_nodes = np.unique(np.concatenate([highway_edges['u'].unique(),highway_edges['v'].unique()]))
+
+
                 nodes = nodes.overlay(origin_gdf_built)
                 temporal_years = [str(i) for i in temporal_years]
+                nodes["highway"] = nodes["osmid"].isin(highway_nodes).astype(int)
                 nodes[temporal_years] = nodes[temporal_years].applymap(lambda x: 1 if x >= built_up_threshold else 0)
 
+                
                 for year in temporal_years:
+                    nodes[year] = (nodes[year].astype(bool) | nodes["highway"].astype(bool)).astype(int)
+
                     G_buff_trunc_loop_year = G_buff_trunc_loop.copy()
                     nodes_to_remove = list(nodes[nodes[year] == 0]['osmid'].values)
                     G_buff_trunc_loop_year.remove_nodes_from(nodes_to_remove)
