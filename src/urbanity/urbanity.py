@@ -31,8 +31,13 @@ import ipyleaflet
 from ipyleaflet import basemaps, basemap_to_tiles, Icon, Marker, LayersControl, \
                        LayerGroup, DrawControl, FullScreenControl, ScaleControl, LocalTileLayer, GeoData
 
-import pyrosm
-from pyrosm import get_data
+try:
+    import pyrosm  # optional heavy dependency
+    from pyrosm import get_data
+except ImportError:  # pyrosm not installed
+    pyrosm = None
+    def get_data(*args, **kwargs):  # type: ignore
+        raise ImportError("pyrosm not installed. Install via 'pip install urbanity[osm]' or conda-forge: 'mamba install pyrosm'.")
 from scipy.stats import entropy
 
 # import module functions and classes

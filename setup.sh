@@ -3,7 +3,7 @@ set -euo pipefail           # safer defaults
 set -x                      # echo commands (remove if you prefer)
 
 # ──────────────────────────────────────────────────────────────
-PKG_VERSION="0.5.12"
+PKG_VERSION="0.5.15"
 CONDA_ENV="urbanity"
 
 # ────────── argument parsing ──────────
@@ -65,6 +65,10 @@ setup_conda_env () {
 
     conda activate "$CONDA_ENV"
     mamba install -c conda-forge -y osmium-tool
+
+    conda activate "$CONDA_ENV"
+    mamba install -c conda-forge -y pyrosm protobuf pyrobuf
+
     
     conda activate "$CONDA_ENV"
     # ── 4. install backend ─────────────────────────────────────────────

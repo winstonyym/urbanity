@@ -3,12 +3,17 @@ import os
 import json
 import math
 import random
-import pyrosm
+try:
+    import pyrosm  # optional heavy dependency
+    from pyrosm import get_data
+except ImportError:  # pyrosm not installed
+    pyrosm = None
+    def get_data(*args, **kwargs):  # type: ignore
+        raise ImportError("pyrosm not installed. Install via 'pip install urbanity[osm]' or conda-forge 'mamba install pyrosm'.")
 import pandas as pd
 import shapely
 from shapely.geometry import Polygon, LineString
 from shapely import wkb
-from pyrosm import get_data
 import pkg_resources
 import numpy as np
 import geopandas as gpd

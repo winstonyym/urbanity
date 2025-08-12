@@ -88,7 +88,9 @@ Towards exploring complexities underlying urban systems and facilitating compara
 ## Quickstart
 
 
-Urbanity is built on several geospatial packages (e.g., GeoPandas, ipyleaflet, rasterio, etc.,) that are best compiled through conda-forge. For seamless installation, we provide an environment.yml file for users to create their own conda environment. Please follow the steps below to ensure proper installation:
+Urbanity is built on several geospatial packages (e.g., GeoPandas, ipyleaflet, rasterio, etc.,) that are best compiled through conda-forge. To speed up installation, heavy OpenStreetMap dependency pyrosm is now optional.
+
+We provide an environment.yml file for users to create their own conda environment. Please follow the steps below to ensure proper installation:
 
 1. Navigate to a location of choice (e.g., Desktop or project folder).
 2. Download environment.yml and setup.sh file and place it at the location of choice (Step 1).
