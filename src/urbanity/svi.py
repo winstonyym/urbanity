@@ -1,9 +1,12 @@
+import os
 import cv2
 import time
 import math
 import torch
+import torch.nn as nn
 import requests
 import warnings
+from collections import deque
 warnings.filterwarnings("ignore", category=UserWarning)
 
 from requests.adapters import HTTPAdapter
@@ -16,9 +19,14 @@ import geopandas as gpd
 from shapely import wkt
 from tqdm import tqdm
 import threading
-import multiprocessing
 import matplotlib.pyplot as plt
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from matplotlib.gridspec import GridSpec
+import matplotlib.patches as mpatches
+from matplotlib import cm
+from shapely.strtree import STRtree
+from scipy.stats import entropy
+
+from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
 from shapely.geometry import Point, Polygon, box
 from mapbox_vector_tile import decode
 from vt2geojson.tools import vt_bytes_to_geojson
@@ -27,10 +35,100 @@ from vt2geojson.features import Layer, Feature
 from ipyleaflet import Marker, Popup
 from ipywidgets import HTML
 from shapely.geometry import LineString, Point
+from torchvision import transforms as T
+from torch.utils.data import Dataset, DataLoader
 
+
+from PIL import Image
 from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
 
 NUM_CLASSES = 65
+
+CLS_DICT = {'0': 'Bird',
+ '1': 'Ground-Animal',
+ '2': 'Curb',
+ '3': 'Fence',
+ '4': 'Guard-Rail',
+ '5': 'Barrier',
+ '6': 'Wall',
+ '7': 'Bike-Lane',
+ '8': 'Crosswalk---Plain',
+ '9': 'Curb-Cut',
+ '10': 'Parking',
+ '11': 'Pedestrian-Area',
+ '12': 'Rail-Track',
+ '13': 'Road',
+ '14': 'Service-Lane',
+ '15': 'Sidewalk',
+ '16': 'Bridge',
+ '17': 'Building',
+ '18': 'Tunnel',
+ '19': 'Person',
+ '20': 'Bicyclist',
+ '21': 'Motorcyclist',
+ '22': 'Other-Rider',
+ '23': 'Lane-Marking---Crosswalk',
+ '24': 'Lane-Marking---General',
+ '25': 'Mountain',
+ '26': 'Sand',
+ '27': 'Sky',
+ '28': 'Snow',
+ '29': 'Terrain',
+ '30': 'Vegetation',
+ '31': 'Water',
+ '32': 'Banner',
+ '33': 'Bench',
+ '34': 'Bike-Rack',
+ '35': 'Billboard',
+ '36': 'Catch-Basin',
+ '37': 'CCTV-Camera',
+ '38': 'Fire-Hydrant',
+ '39': 'Junction-Box',
+ '40': 'Mailbox',
+ '41': 'Manhole',
+ '42': 'Phone-Booth',
+ '43': 'Pothole',
+ '44': 'Street-Light',
+ '45': 'Pole',
+ '46': 'Traffic-Sign-Frame',
+ '47': 'Utility-Pole',
+ '48': 'Traffic-Light',
+ '49': 'Traffic-Sign-(Back)',
+ '50': 'Traffic-Sign-(Front)',
+ '51': 'Trash-Can',
+ '52': 'Bicycle',
+ '53': 'Boat',
+ '54': 'Bus',
+ '55': 'Car',
+ '56': 'Caravan',
+ '57': 'Motorcycle',
+ '58': 'On-Rails',
+ '59': 'Other-Vehicle',
+ '60': 'Trailer',
+ '61': 'Truck',
+ '62': 'Wheeled-Slow',
+ '63': 'Car-Mount',
+ '64': 'Ego-Vehicle',
+ '-1': 'Others'}
+
+# For Visualisation
+CLS_DICT_INT = {int(k): v for k, v in CLS_DICT.items()}
+LABEL_TO_ID = {v: k for k, v in CLS_DICT.items()}          # string id
+LABEL_TO_ID_INT = {v: int(k) for k, v in CLS_DICT.items()} # int id
+
+perception_model_path = '../models'
+
+perception = ['safety', 'lively', 'wealthy',
+              'beautiful', 'boring', 'depressing']
+
+perception_model_dict = {
+    'safety': 'safety.pth',
+    'lively': 'lively.pth',
+    'wealthy': 'wealthy.pth',
+    'beautiful': 'beautiful.pth',
+    'boring': 'boring.pth',
+    'depressing': 'depressing.pth',
+}
 
 # Client secret
 session = requests.Session()
@@ -39,30 +137,66 @@ adapter = HTTPAdapter(max_retries=retry)
 session.mount('http://', adapter)
 session.mount('https://', adapter)
 
-def addIndice(output_max):
-    set_of_pixels = torch.unique(output_max, return_counts=True)
-    set_dictionary = {}
-    for i in range(NUM_CLASSES):
-            set_dictionary[i] = float("NaN")
-    for pixel,count in zip(set_of_pixels[0], set_of_pixels[1]):
-        set_dictionary[pixel.item()] = count.item()
-    set_dictionary[66] = int(np.nansum(list(set_dictionary.values())))
-    return set_dictionary
+transform_img = T.Compose([
+    T.ToTensor(),
+    T.Resize((384, 384)),
+    T.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225])
+])
+
+
+def predict(model, img, device, transform=None):
+
+    if transform:
+        img = transform(img)
+
+    img = img.view(1, 3, 384, 384)
+    # inference
+    if device == 'cuda':
+        pred = model(img.cuda())
+    else:
+        pred = model(img)
+
+    softmax = nn.Softmax(dim=1)
+    pred = softmax(pred)[0][1].item()
+    pred = round(pred*10, 2)
+
+    return pred
+
+def batch_predict(model, img_batch):
+
+    pred = model(img_batch)
+
+    softmax = nn.Softmax(dim=1)
+    pred = [round(i.item()*10,2) for i in softmax(pred)[:,1]]
+    
+    return pred
+
+def load_perception_models(perception_model_path, device):
+    perception_models = []
+    for p in perception:
+        model_path = perception_model_path + "/" + perception_model_dict[p]
+        model = torch.load(model_path, map_location=torch.device(device), weights_only=False)
+        model = model.to(device)
+        model.eval()
+        perception_models.append(model)
+    return perception_models
 
 def addInstance(output_max):
     if isinstance(output_max, list):
        output_max = output_max[0]
 
     set_dictionary = {}
-    for i in range(NUM_CLASSES):
-                set_dictionary[str(i)] = 0
+    for i in CLS_DICT.values():
+        set_dictionary[i] = 0
 
     list_unique, list_counts = torch.unique(output_max['segmentation'].int(), return_counts=True)
 
-    total = torch.sum(list_counts).item()
+    total = torch.sum(list_counts).item() 
 
     if -1 in list_unique:
-        set_dictionary['-1'] = list_counts[0].item()
+        set_dictionary['Others'] = round(list_counts[0].item() / total, 5)
         list_unique = list_unique[1:]
         list_counts = list_counts[1:]
 
@@ -72,9 +206,9 @@ def addInstance(output_max):
         matching_dict[i] = int(k['label_id'])
 
     for i, k in zip(list_unique, list_counts):
-        set_dictionary[str(matching_dict[i.item()])] += k.item()
-        
-    set_dictionary['Total'] = total
+        set_dictionary[CLS_DICT[str(matching_dict[i.item()])]] += round(k.item() / total, 5)
+    
+    set_dictionary['Visual Complexity'] = entropy(np.array(list(set_dictionary.values())), base=2)
 
     return set_dictionary
 
@@ -85,14 +219,14 @@ def addInstanceCounts(output_max):
     instance_dictionary = {}
     
     instance_dictionary = {}
-    for i in range(NUM_CLASSES):
+    for i in CLS_DICT.values():
                 instance_dictionary[str(i)] = 0
     
     # for each segment, draw its legend
     for segment in output_max['segments_info']:
         segment_id = segment['id']
         segment_label_id = str(segment['label_id'])
-        instance_dictionary[segment_label_id] += 1
+        instance_dictionary[CLS_DICT[segment_label_id]] += 1
 
     return instance_dictionary
 
@@ -322,15 +456,23 @@ def process_image(image_id, session, api_key, max_retries=3, retry_delay=1):
     
     return image_id, image_rgb
 
+def segment_image(img_id, image_rgb, processor, segment_model, device):
+    # Preprocessing
+    inputs = processor(images=image_rgb, return_tensors="pt")
+    with torch.no_grad():
+        pixel_values = inputs['pixel_values'].to(device)
+        pixel_mask = inputs['pixel_mask'].to(device)
+        outputs = segment_model(pixel_values=pixel_values, pixel_mask=pixel_mask)
+    # Post-process
+    out = processor.post_process_instance_segmentation(
+        outputs, target_sizes=[image_rgb.shape[:-1]], threshold=0.5
+    )
+    return img_id, addInstance(out), addInstanceCounts(out)
 
-def parallel_segment_images(filepath, api_key, device, add_perception=False, perception_models=None):
-
+def parallel_segment_images(image_gdf, processor, segment_model, api_key, device):
     # Initialise placeholders
     image_instances_dict = {}
     image_indicators_dict = {}
-
-    # Read filepath
-    image_set = gpd.read_parquet(filepath)
 
     results = {}
     results_lock = threading.Lock()
@@ -338,61 +480,51 @@ def parallel_segment_images(filepath, api_key, device, add_perception=False, per
     # Create a session object
     session = requests.Session()
     
+    failures = []
     # Create and start threads
-    # with tqdm(total=len(tiles)) as pbar:
-    with ThreadPoolExecutor(max_workers=20) as executor:
-        future_to_tile = {executor.submit(process_image, image_id, session, api_key): image_id for image_id in image_set['image_id']}
-        for future in as_completed(future_to_tile):
-            try:
-                image_id, image_rgb = future.result()
-                with results_lock:
-                    results[image_id] = image_rgb
-            except Exception as e:
-                print(f'Error occurred while processing tile: {e}')
-                # pbar.update(1)
+    with ThreadPoolExecutor(max_workers=None) as executor:
+        future_to_id = {executor.submit(process_image, image_id, session, api_key): image_id for image_id in image_gdf['image_id']}
+        with tqdm(total=len(future_to_id), desc="Downloading images", unit="img") as pbar:
+            for future in as_completed(future_to_id):
+                image_id = future_to_id[future]
+                try:
+                    img_id, image_rgb = future.result()
+                    with results_lock:
+                        results[img_id] = image_rgb
+                except Exception as e:
+                    failures.append((image_id, e))
+                finally:
+                    pbar.update(1)
 
     # Close the session
     session.close()
-    print('Downloaded images')
-    # Load Mask2former
-    processor = AutoImageProcessor.from_pretrained("facebook/mask2former-swin-large-mapillary-vistas-panoptic")
-    segment_model = Mask2FormerForUniversalSegmentation.from_pretrained("facebook/mask2former-swin-large-mapillary-vistas-panoptic")
+    print('Downloaded images...')
+    print('Starting segmentation')
+    # Load model, etc. as before
     segment_model = segment_model.to(device)
 
-    # Load Perception Models
-    if add_perception:
-        if perception_models is None:
-            raise Exception('Please specify perception models')
-        
-        columns = ['image_id'] + [str(p)+"_score" for p in perception]
-        perception_df = pd.DataFrame()
+    # Prepare results containers
+    image_instances_dict = {}
+    image_indicators_dict = {}
 
-    for img_id, image_rgb in tqdm(results.items()):
-        inputs = processor(images=image_rgb, return_tensors="pt")
-
-        with torch.no_grad():
-            pixel_values = inputs['pixel_values'].to(device)
-            pixel_mask = inputs['pixel_mask'].to(device)
-            outputs = segment_model(pixel_values=pixel_values, pixel_mask=pixel_mask)
-            # you can pass them to processor for postprocessing
-        
-        # Post-process segmentation
-        out = processor.post_process_instance_segmentation(outputs, target_sizes=[image_rgb.shape[:-1]], threshold=0.5)
-        image_indicators_dict[img_id] = addInstance(out)
-        image_instances_dict[img_id] = addInstanceCounts(out)
-        
-        new_row = [img_id] + [predict(model, pixel_values, device, transform=None) for model in perception_models]
-        new_df = pd.DataFrame({k:[v] for k,v in zip(columns, new_row)})
-        perception_df = pd.concat([perception_df, pd.DataFrame(new_df)], ignore_index=True)
+    futures = []
+    with ThreadPoolExecutor(max_workers=None) as executor:  # adjust workers as needed
+        for img_id, image_rgb in results.items():
+            futures.append(executor.submit(
+                segment_image, img_id, image_rgb, processor, segment_model, device
+            ))
+        for future in tqdm(as_completed(futures), total=len(futures)):
+            img_id, indicators, instances = future.result()
+            image_indicators_dict[img_id] = indicators
+            image_instances_dict[img_id] = instances
 
     # Convert to dataframes
     indicators_df = pd.DataFrame.from_dict(image_indicators_dict, orient='index')
     instances_df = pd.DataFrame.from_dict(image_instances_dict, orient='index')
 
     # Merge dataframes
-    merged = image_set.merge(indicators_df, how='left', left_on='image_id', right_on = indicators_df.index)
+    merged = image_gdf.merge(indicators_df, how='left', left_on='image_id', right_on = indicators_df.index)
     merged = merged.merge(instances_df, how='left', left_on='image_id', right_on = indicators_df.index, suffixes=('_pixels', '_counts'))
-    merged = merged.merge(perception_df, how='left', on='image_id')
 
     return merged
 
@@ -423,7 +555,9 @@ def parallel_batch_images(api_key, batch_size_ids):
     
     return results.items()
 
-def parallel_segment_images_in_batches(filepath, 
+def parallel_segment_images_in_batches(image_gdf, 
+                                       processor,
+                                       model, 
                                        api_key, 
                                        device, 
                                        batch_size=1000,
@@ -432,13 +566,9 @@ def parallel_segment_images_in_batches(filepath,
                                        perception_models=None):
 
     # Load images
-    image_df = gpd.read_parquet(filepath)
-    image_set = list(image_df['image_id'].unique())
+    image_set = list(image_gdf['image_id'].unique())
 
-    # Load Mask2former
-    processor = AutoImageProcessor.from_pretrained("facebook/mask2former-swin-large-mapillary-vistas-panoptic")
-    segment_model = Mask2FormerForUniversalSegmentation.from_pretrained("facebook/mask2former-swin-large-mapillary-vistas-panoptic")
-    segment_model = segment_model.to(device)
+    model = model.to(device)
     
     # Load Perception Models
     if add_perception:
@@ -467,7 +597,7 @@ def parallel_segment_images_in_batches(filepath,
             value_tensor_list = torch.concat([value['pixel_values'] for value in processed]).to(device)
             mask_tensor_list = torch.concat([value['pixel_mask'] for value in processed]).to(device)
             # Inference
-            outputs = segment_model(pixel_values=value_tensor_list, pixel_mask=mask_tensor_list)
+            outputs = model(pixel_values=value_tensor_list, pixel_mask=mask_tensor_list)
             out = processor.post_process_instance_segmentation(outputs, target_sizes=[img.shape[:-1] for img in img_rgb_list], threshold=0.5)
 
             instance_list = map(addInstance, out)
@@ -479,33 +609,30 @@ def parallel_segment_images_in_batches(filepath,
             for img_id, instance_counts_dict in zip(img_id_list, instance_counts_list):
                 image_indicators_dict[img_id] = instance_counts_dict
 
-            perception_preds = [batch_predict(model, value_tensor_list) for model in perception_models]
-            new_df = pd.DataFrame({'image_id': img_id_list,
-                                'safety_score': perception_preds[0],
-                                'lively_score': perception_preds[1],
-                                'wealthy_score': perception_preds[2],
-                                'beautiful_score': perception_preds[3],
-                                'boring_score': perception_preds[4],
-                                'depressing_score': perception_preds[5]})
+            if add_perception:
+                perception_preds = [batch_predict(model, value_tensor_list) for model in perception_models]
+                new_df = pd.DataFrame({'image_id': img_id_list,
+                                    'safety_score': perception_preds[0],
+                                    'lively_score': perception_preds[1],
+                                    'wealthy_score': perception_preds[2],
+                                    'beautiful_score': perception_preds[3],
+                                    'boring_score': perception_preds[4],
+                                    'depressing_score': perception_preds[5]})
 
-            perception_df = pd.concat([perception_df, pd.DataFrame(new_df)], ignore_index=True)
+                perception_df = pd.concat([perception_df, pd.DataFrame(new_df)], ignore_index=True)
 
     # Convert to dataframes
     indicators_df = pd.DataFrame.from_dict(image_indicators_dict, orient='index')
     instances_df = pd.DataFrame.from_dict(image_instances_dict, orient='index')
 
     # Merge dataframes
-    merged = image_df.merge(indicators_df, how='left', left_on='image_id', right_on = indicators_df.index)
+    merged = image_gdf.merge(indicators_df, how='left', left_on='image_id', right_on = indicators_df.index)
     merged = merged.merge(instances_df, how='left', left_on='image_id', right_on = indicators_df.index, suffixes=('_counts', '_pixels'))
 
     if add_perception:
         merged = merged.merge(perception_df, how='left', on='image_id')
     
     return merged
-
-
-
-
     
 class MyFeature(Feature):
     def __init__(self, x, y, z, obj, extent=4096):
@@ -649,9 +776,6 @@ def filter_by_alignment_finegrained(image_gdf_proj, tract_edges, limit=10):
     nearest_edge = nearest_edge[nearest_edge['aligned'] == True]
     nearest_edge.crs = image_gdf_proj.crs
     nearest_edge = nearest_edge.to_crs(4326)
-
-
-
 
 
 
@@ -1060,3 +1184,331 @@ def view_image(image_id, api_key = ''):
 def draw_line(lon, lat, bearing):
     r = 0.0001  # or whatever fits you
     plt.arrow(lon, lat, r*math.cos(bearing), r*math.sin(bearing), width=0.0001, color='red') 
+
+def save_image_to_folder(image_gdf, output_dir, session, api_key, max_retries=3, retry_delay=1):
+    image_set = list(image_gdf['image_id'].unique())
+    for image_id in image_set:
+        image_path = f'{image_id}.jpg'
+        url = f'https://graph.mapillary.com/{image_id}?fields=thumb_256_url'
+
+        attempt = 0
+        while attempt < max_retries:
+            try:
+                response = session.get(url, params={'access_token': api_key})
+                response.raise_for_status()
+                image_data = response.json()
+                image_url = image_data['thumb_256_url']
+        
+                response = session.get(image_url, stream=True)
+                response.raise_for_status()
+                response = response.raw
+            
+                break  # Exit loop if request is successful
+            except requests.RequestException as e:
+                attempt += 1
+                print(f'Connection error for image: {image_id} (Attempt {attempt}/{max_retries}): {e}')
+                if attempt < max_retries:
+                    time.sleep(retry_delay)  # Wait before retrying
+                else:
+                    print(f'Failed to fetch image: {image_id} after {max_retries} attempts.')
+                    return []  # Return an empty list if all attempts fail
+
+        image_array = np.asarray(bytearray(response.read()), dtype=np.uint8)
+        image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)   
+        
+        # Convert BGR to RGB
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        cv2.imwrite(os.path.join(output_dir, image_path), image_rgb)
+
+def assign_closest_points_to_linestring(image_gdf, street_gdf):
+    svi_gdf = image_gdf.copy()
+    # 0) Project to meters
+    if svi_gdf.crs is None or svi_gdf.crs.is_geographic:
+        points_gdf = svi_gdf.to_crs(3857)
+        lines_gdf  = street_gdf.to_crs(3857)
+
+    # 1) Build an STRtree over line geometries (cheap to query many times)
+    line_geoms   = lines_gdf.geometry.values
+    tree         = STRtree(line_geoms)
+    line_ids_arr = lines_gdf.index.to_numpy()  # or use a dedicated id column
+
+    # 2) Query all nearest lines at once
+    pt_geoms = points_gdf.geometry.values
+    # idx_pt: indices into pt_geoms; idx_ln: indices into line_geoms
+    idx, dists = tree.query_nearest(pt_geoms, return_distance=True)
+    idx_pt = idx[0,:]
+    idx_ln = idx[1,:]
+    # 3) Place results back into arrays aligned to points_gdf
+    nearest_line_id = np.empty(len(points_gdf), dtype=line_ids_arr.dtype)
+    nearest_dist_m  = np.empty(len(points_gdf), dtype="float64")
+    nearest_line_id[idx_pt] = line_ids_arr[idx_ln]
+    nearest_dist_m[idx_pt]  = dists
+
+    # 4) Attach to a copy or the original GeoDataFrame
+    out = points_gdf.copy()
+    out["nearest_street_id"] = nearest_line_id
+    out["dist_to_line"] = nearest_dist_m
+
+    svi_gdf = svi_gdf.merge(out[['image_id', 'nearest_street_id', 'dist_to_line']], on='image_id')
+
+    return svi_gdf
+
+def assign_closest_points_to_linestring_and_sample(image_gdf, street_gdf, bin_distance = 20, proximity_distance = 10):
+    svi_gdf = image_gdf.copy()
+    if svi_gdf.crs is None or svi_gdf.crs.is_geographic:
+        points_gdf = svi_gdf.to_crs(3857)
+        lines_gdf  = street_gdf.to_crs(3857)
+
+        # 1) Build STRtree on lines once
+        line_geoms = lines_gdf.geometry.values
+        tree = STRtree(line_geoms)
+
+        # Use a stable line identifier
+        line_ids_arr = lines_gdf.index.to_numpy()
+
+        # 2) Nearest line for every point
+        pt_geoms = points_gdf.geometry.values
+        idx, dists = tree.query_nearest(pt_geoms, return_distance=True)
+        idx_pt = idx[0,:]
+        idx_ln = idx[1,:]
+
+        # Align results to points_gdf’s index order
+        n = len(points_gdf)
+        nearest_line_idx = np.empty(n, dtype=np.int64)
+        nearest_line_id = np.empty(n, dtype=line_ids_arr.dtype)
+        nearest_dist_m = np.empty(n, dtype="float64")
+        nearest_line_idx[idx_pt] = idx_ln
+        nearest_line_id[idx_pt]  = line_ids_arr[idx_ln]
+        nearest_dist_m[idx_pt] = dists
+
+        # 3) Project each point onto its matched line to get arclength along the line
+        #    This is O(N) in Python but uses shapely C-core per operation and is fast in practice
+        proj_m = np.fromiter(
+            (line_geoms[i].project(pt) for pt, i in zip(pt_geoms, nearest_line_idx)),
+            dtype="float64", count=n
+        )
+
+        # 4) Bin by arclength along the line
+        bins = (proj_m // bin_distance).astype(np.int64)
+
+        # 5) Within each (line_id, bin) keep the point closest to the line (smallest distance)
+        df = pd.DataFrame({
+            "nearest_street_id": nearest_line_id,
+            "bin": bins,
+            "dist_m": nearest_dist_m,
+        }, index=points_gdf.index)
+
+        df = df[df['dist_m']<=proximity_distance]
+
+        keep_idx = df.groupby(["nearest_street_id", "bin"])["dist_m"].idxmin()
+
+        # 6) Return thinned points with metadata
+        out = points_gdf.loc[keep_idx].copy()
+        out["nearest_street_id"] = df.loc[keep_idx, "nearest_street_id"].values
+        out["dist_to_line"]  = df.loc[keep_idx, "dist_m"].values
+        out.attrs["bin_size_m"] = bin_distance
+        svi_gdf = svi_gdf.merge(out[['image_id','nearest_street_id', 'dist_to_line']], on='image_id')
+
+    return svi_gdf
+
+def _default_class_colors():
+    """Create a full color map for all classes, with sensible defaults for common labels."""
+    num_classes = len(CLS_DICT_INT)
+    cmap = cm.get_cmap('tab20', num_classes)
+    class_colors = {cid: (np.array(cmap(i)[:3]) * 255).astype(int).tolist()
+                    for i, cid in enumerate(sorted(CLS_DICT_INT.keys()))}
+    # Preferred overrides
+    class_colors[27] = [142, 202, 230]  # Sky
+    class_colors[17] = [74, 87, 89]     # Building
+    class_colors[30] = [96, 108, 56]    # Vegetation / Greenery
+    class_colors[55] = [252, 163, 17]   # Car
+    return class_colors
+
+def _colorize_mask(mask: np.ndarray, class_colors: dict) -> np.ndarray:
+    """Convert a 2D segmentation mask to an RGB image using class_colors {class_id: [r,g,b]}."""
+    h, w = mask.shape
+    rgb = np.zeros((h, w, 3), dtype=np.uint8)
+    # Vectorized painting per class id
+    for cid, color in class_colors.items():
+        rgb[mask == cid] = color
+    return rgb
+
+def _compute_percentages(seg_mask: np.ndarray, ids_of_interest=None, min_pct=0.0, top_k=None):
+    """
+    Returns list of tuples (class_id, pct_float) sorted by descending percentage.
+    ids_of_interest can be None for all present classes.
+    min_pct filters out tiny classes.
+    top_k limits the number of rows returned.
+    """
+    total = seg_mask.size
+    unique, counts = np.unique(seg_mask, return_counts=True)
+    pct_map = {int(k): 100.0 * c / total for k, c in zip(unique, counts)}
+
+    # restrict to interest ids if provided
+    items = pct_map.items()
+    if ids_of_interest is not None:
+        ids_set = set(int(i) for i in ids_of_interest)
+        items = [(cid, pct) for cid, pct in items if cid in ids_set]
+
+    # filter by min pct
+    rows = [(cid, pct) for cid, pct in items if pct >= min_pct]
+
+    # sort and cap
+    rows.sort(key=lambda x: -x[1])
+    if top_k is not None:
+        rows = rows[:top_k]
+    return rows
+
+def _rgb255_to_hex(rgb):
+    r, g, b = rgb
+    return '#%02x%02x%02x' % (int(r), int(g), int(b))
+
+
+def display_segmentation_grid(
+    image_gdf,
+    processor,
+    model,
+    device,
+    rows=3,
+    cols=4,
+    id_col='image_id',
+    mapillary_token_env='MAPILLARY_API_TOKEN',
+    classes_to_color=['Sky', 'Building', 'Vegetation', 'Car'],       # list of labels for figure legend and also default ids_of_interest
+    extra_color_overrides={'Sky': '#8ecae6',
+                            'Building': '#4a5759',
+                            'Vegetation': '#606c38',   # maps to Vegetation
+                            'Car': '#ffc8dd',
+                            },  # dict label -> hex or [r,g,b]
+    title_fn=None,
+    save_path=None,
+    # New controls for per subplot percentage box
+    per_subplot_min_pct=1.0,     # only show classes with percentage at least this value
+    per_subplot_top_k=None,      # limit number of lines shown per subplot
+    per_subplot_loc='lower left',# legend location within each segmentation axis
+    per_subplot_fontsize=9,      # text size
+    per_subplot_box=True         # add a small frame so text is readable
+):
+    assert cols % 2 == 0, "cols must be even since each image uses two columns"
+    n_pairs = rows * (cols // 2)
+    image_ids = list(image_gdf[id_col].values)[:n_pairs]
+
+    # colors
+    class_colors = _default_class_colors()
+
+    def _to_rgb255(c):
+        if isinstance(c, str) and c.startswith('#'):
+            c = c.lstrip('#')
+            return [int(c[i:i+2], 16) for i in (0, 2, 4)]
+        if isinstance(c, (list, tuple)) and len(c) == 3:
+            return list(map(int, c))
+        raise ValueError("Color must be hex '#RRGGBB' or [r,g,b]")
+
+    selected_labels = list(classes_to_color) if classes_to_color else []
+    if extra_color_overrides:
+        for label, color in extra_color_overrides.items():
+            if label in LABEL_TO_ID_INT:
+                class_colors[LABEL_TO_ID_INT[label]] = _to_rgb255(color)
+
+    # figure level legend for selected labels
+    legend_patches = []
+    for label in selected_labels:
+        if label in LABEL_TO_ID_INT:
+            cid = LABEL_TO_ID_INT[label]
+            legend_patches.append(
+                mpatches.Patch(color=_rgb255_to_hex(class_colors[cid]), label=label)
+            )
+
+    fig_h = rows * 3.2
+    fig_w = 16
+    fig = plt.figure(figsize=(fig_w, fig_h))
+    gs = GridSpec(rows, cols, figure=fig, hspace=0.02, wspace=0.05)
+
+    token = os.environ.get(mapillary_token_env, None)
+    if token is None:
+        raise RuntimeError(f"Set {mapillary_token_env} in your environment")
+
+    def _load_image(image_id):
+        url = f'https://graph.mapillary.com/{image_id}?fields=thumb_2048_url'
+        data = requests.get(url, params={'access_token': token}).json()
+        im_url = data['thumb_2048_url']
+        return Image.open(requests.get(im_url, stream=True).raw).convert('RGB')
+
+    # ids of interest for percentage box
+    ids_of_interest = None
+    if selected_labels:
+        ids_of_interest = [LABEL_TO_ID_INT[lbl] for lbl in selected_labels if lbl in LABEL_TO_ID_INT]
+
+    for i, image_id in enumerate(image_ids):
+        row = i // (cols // 2)
+        col = (i % (cols // 2)) * 2
+
+        im = _load_image(image_id)
+
+        inputs = processor(images=im, return_tensors="pt")
+        with torch.no_grad():
+            pixel_values = inputs['pixel_values'].to(device)
+            pixel_mask = inputs.get('pixel_mask')
+            if pixel_mask is not None:
+                outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask.to(device))
+            else:
+                outputs = model(pixel_values=pixel_values)
+
+        target_size = [im.size[::-1]]
+        seg = processor.post_process_semantic_segmentation(
+            outputs, target_sizes=target_size
+        )[0].to('cpu').numpy()
+        seg_rgb = _colorize_mask(seg, class_colors)
+
+        # original subplot
+        ax0 = fig.add_subplot(gs[row, col])
+        ax0.imshow(im)
+        ax0.axis('off')
+        if title_fn:
+            ax0.set_title(str(title_fn(i, image_id, image_gdf.iloc[i] if i < len(image_gdf) else None)), fontsize=10)
+        else:
+            ax0.set_title(f'Original {i+1}', fontsize=10)
+
+        # segmentation subplot
+        ax1 = fig.add_subplot(gs[row, col + 1])
+        ax1.imshow(seg_rgb, interpolation='nearest')
+        ax1.axis('off')
+        ax1.set_title('Segmented', fontsize=10)
+
+        # compute and draw per subplot percentages
+        rows_pct = _compute_percentages(
+            seg_mask=seg,
+            ids_of_interest=ids_of_interest,      # None means all classes present
+            min_pct=per_subplot_min_pct,
+            top_k=per_subplot_top_k
+        )
+
+        if rows_pct:
+            handles = []
+            for cid, pct in rows_pct:
+                label = CLS_DICT_INT.get(cid, str(cid))
+                color_hex = _rgb255_to_hex(class_colors.get(cid, [200, 200, 200]))
+                handles.append(mpatches.Patch(color=color_hex, label=f"{label} {pct:.1f}%"))
+
+            leg = ax1.legend(handles=handles,
+                             loc=per_subplot_loc,
+                             fontsize=per_subplot_fontsize,
+                             frameon=per_subplot_box,
+                             handlelength=0.8,
+                             borderpad=0.3,
+                             labelspacing=0.3)
+            if per_subplot_box and leg is not None:
+                leg.get_frame().set_alpha(0.75)
+
+    # figure level legend
+    if legend_patches:
+        leg = fig.legend(handles=legend_patches, loc='upper center', handlelength=1,
+                         bbox_to_anchor=(0.5, 0.93), ncol=min(len(legend_patches), 6),
+                         frameon=False, prop={'size': 11})
+        for patch in leg.get_patches():
+            patch.set_height(10)
+            patch.set_y(-0.5)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=180)
+    plt.show()

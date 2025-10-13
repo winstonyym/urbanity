@@ -24,6 +24,7 @@ import numpy as np
 import networkx as nx
 import pandas as pd
 import geopandas as gpd
+from shapely.strtree import STRtree
 from shapely.geometry import Polygon, box
 from shapely.ops import unary_union, polygonize, snap
 
@@ -45,6 +46,7 @@ from .utils import get_country_centroids, finetune_poi, \
                    get_available_precomputed_network_data, most_frequent, gdf_to_poly
 from .geom import *
 from .building import *
+from .svi import parallel_download_image_in_tiles, assign_closest_points_to_linestring_and_sample
 from .population import get_meta_population_data, get_tiled_population_data, raster2gdf, extract_tiff_from_shapefile, load_npz_as_raster, mask_raster_with_gdf, \
                         is_bounding_box_within, find_valid_tif_files, mask_raster_with_gdf_large_raster, download_pop_tiff_from_path, merge_raster_list
 from .topology import compute_centrality, merge_nx_property, merge_nx_attr
@@ -79,6 +81,7 @@ class Map(ipyleaflet.Map):
         self.target_cols = []
         self.buildings = None
         self.population = []
+        self.all_svi = None
         self.svi = None
         self.pois = None
         self.urban_plots = None
@@ -422,6 +425,163 @@ class Map(ipyleaflet.Map):
         values_dict['Mean absolute error'] = mean_absolute_error
         
         return values_dict, non_empty
+
+
+    def get_network_layer(
+            self, 
+            location: str = '',
+            network_filepath: str = '', 
+            bandwidth: int = 100,
+            network_type: str = 'driving',
+            add_svi: bool = True,
+            bin_distance: int = 20,
+            proximity_distance: int = 10):
+        """Method to assign urban network layer information (optionally add SVI from Mapillary). 
+        Bandwidth (m) can be specified to buffer network, obtaining neighbouring nodes within buffered area of network.
+
+        Args:
+            location (str): Accepts city name or country name to obtain OpenStreetMap data.
+            network_filepath (str): Specify path to osm.pbf file.
+            bandwidth (int): Distance to extract information beyond network. Defaults to 100.
+            network_type (str): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
+            add_svi (bool): If True, collect street view imagery data from Mapillary and add it to network.
+            sample_svi_distance (int): Distance to sample SVI for computational tractibility. Defaults to sampling one image every 20 meters.
+            proximity_distance (int): Distance to include SVI based on adjacent distance to street segment. Defaults to 10 meters and excludes points that fall beyond this distance. 
+        """
+
+        # If precomputed available, use precomputed
+        self.location = location
+        start = time.time()
+
+        if self.network:
+            print('Network data found, skipping re-computation')
+            G_buff_trunc_loop, nodes, edges = self.network[0], self.network[1], self.network[2]
+            original_bbox = self.polygon_bounds.geometry[0]
+            buffered_tp = self.polygon_bounds.copy()
+            buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+            buffered_bbox = buffered_tp.geometry.values[0]
+            './data/'
+            osm = pyrosm.OSM('./data/temp.osm.pbf', bounding_box=buffered_bbox)
+        else:
+            if network_filepath == '':
+                try:
+                    fp = get_data(self.location, directory = self.directory)
+                    print('Creating data folder and downloading osm street data...')
+                except ValueError:
+                    fp = get_data(self.country, directory = self.directory)
+                    print(f"ValueError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+                except ValueError:
+                    raise ValueError('No osm data found for specified location.')
+
+                network_filepath = fp
+                print('Data extracted successfully. Proceeding to construct street network.')
+
+            # Project and buffer original polygon to examine nodes outside boundary
+            try:
+                original_bbox = self.polygon_bounds.geometry[0]
+                buffered_tp = self.polygon_bounds.copy()
+                buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+                buffered_bbox = buffered_tp.geometry.values[0]
+            # catch when it hasn't even been defined 
+            except (AttributeError, NameError):
+                raise Exception('Please delimit a bounding box.')
+            
+            # Obtain nodes and edges within buffered polygon
+            data_root = './data/'
+            if not os.path.exists(data_root):
+                os.makedirs(data_root)
+
+            poly_path = os.path.join(data_root, 'temp.poly')
+            osm_path = os.path.join(data_root, 'temp.osm.pbf')
+
+            if os.path.isfile(poly_path):
+                os.remove(poly_path)
+
+            if os.path.isfile(osm_path):
+                os.remove(osm_path)
+            self.polygon_bounds = self.polygon_bounds[['geometry']]
+            self.polygon_bounds = self.polygon_bounds.reset_index()
+            self.polygon_bounds.columns = ['boundary_id', 'geometry']
+
+            gdf_to_poly(self.polygon_bounds, poly_path, column='boundary_id')
+            cmd = [
+                    "osmium", "extract", 
+                    "-p", poly_path,
+                    network_filepath,
+                    "-o", osm_path
+                ]
+
+            subprocess.run(cmd, capture_output=False, text=True)
+
+            osm = pyrosm.OSM(osm_path, bounding_box=buffered_bbox)
+            
+            nodes, edges = osm.get_network(network_type=network_type, nodes=True)
+
+            # Build networkx graph for pre-processing
+            G_buff = osm.to_graph(nodes, edges, graph_type="networkx", force_bidirectional=True, retain_all=True)
+
+            # Add great circle length to network edges
+            G_buff = add_edge_lengths(G_buff)
+
+            # Simplify graph by removing nodes between endpoints and joining linestrings
+            G_buff_simple = simplify_graph(G_buff)
+
+            # Identify nodes inside and outside (buffered polygon) of original polygon
+            gs_nodes = graph_to_gdf(G_buff_simple, nodes=True)[["geometry"]]
+            to_keep = gs_nodes.within(original_bbox)
+            to_keep = gs_nodes[to_keep]
+            nodes_outside = gs_nodes[~gs_nodes.index.isin(to_keep.index)]
+            set_outside = nodes_outside.index
+
+            # Truncate network by edge if all neighbours fall outside original polygon
+            nodes_to_remove = set()
+            for node in set_outside:
+                neighbors = set(G_buff_simple.successors(node)) | set(G_buff_simple.predecessors(node))
+                if neighbors.issubset(nodes_outside):
+                    nodes_to_remove.add(node)
+            
+            G_buff_trunc = G_buff_simple.copy()
+            initial = G_buff_trunc.number_of_nodes()
+            G_buff_trunc.remove_nodes_from(nodes_to_remove)
+
+            # Remove unconnected subgraphs
+            max_wcc = max(nx.weakly_connected_components(G_buff_trunc), key=len)
+            G_buff_trunc = nx.subgraph(G_buff_trunc, max_wcc)
+
+            # Remove self loops
+            G_buff_trunc_loop = G_buff_trunc.copy()
+            G_buff_trunc_loop.remove_edges_from(nx.selfloop_edges(G_buff_trunc_loop))
+            
+            nodes, edges = graph_to_gdf(G_buff_trunc_loop, nodes=True, edges=True)
+
+            # Fill NA and drop incomplete columns
+            nodes = nodes.fillna('')
+            edges = edges.fillna('')
+            nodes = nodes.drop(columns=['osmid','tags','timestamp','version','changeset']).reset_index()
+            edges = edges.reset_index()[['u','v','length','geometry']]
+    
+            # Assign unique IDs
+            nodes['intersection_id'] = nodes.index
+            nodes = nodes[['intersection_id','osmid', 'x', 'y', 'geometry']]
+            
+            edges = edges[['u', 'v', 'length','geometry']]
+
+            edges =  drop_duplicate_lines(edges)
+
+            self.network.append(G_buff_trunc_loop)
+            self.network.append(nodes)
+            self.network.append(edges)
+
+            print(f'Network constructed. Time taken: {round(time.time() - start)}.')
+
+            # Add SVI information from Mapillary
+            if add_svi:
+                image_gdf = parallel_download_image_in_tiles(self.polygon_bounds, api_key=MAPILLARY_API_TOKEN)
+                svi_gdf = assign_closest_points_to_linestring_and_sample(image_gdf, edges, bin_distance = bin_distance)
+            
+            # Assign svis to map properties
+            self.all_svi = image_gdf
+            self.svi = svi_gdf
 
     def get_street_network(
             self, 
