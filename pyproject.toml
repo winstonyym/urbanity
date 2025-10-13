@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "urbanity"
-version = "0.5.17"  # patch: make pyrosm optional for faster base install
+version = "0.5.18"  # patch: make pyrosm optional for faster base install
 description = "A python package to generate urban graphs for any geographical location and scale"
 authors = ["winstonyym <winstonyym@u.nus.edu>"]
 license = "MIT"
