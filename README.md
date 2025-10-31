@@ -2,8 +2,8 @@
 [![Downloads](https://pepy.tech/badge/urbanity)](https://pepy.tech/project/urbanity)
 [![Downloads](https://pepy.tech/badge/urbanity/month)](https://pepy.tech/project/urbanity)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1K-6DlBbuQX48WVsxpwAymgLlibPOJHME?usp=sharing)
+[![Documentation Status](https://readthedocs.org/projects/urbanity/badge/?version=latest)](https://urbanity.readthedocs.io/en/latest/?badge=latest)
 
-<!-- [![Documentation Status](https://img.shields.io/readthedocs/urbanity)](https://urbanity.readthedocs.io/) -->
 
 </br>
 </br>
