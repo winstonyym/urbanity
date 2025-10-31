@@ -153,13 +153,17 @@ $ jupyter lab
 
 If you use Urbanity in your work, please cite:
 <br></br>
-Yap, W., Biljecki, F. (2025, June). Leveraging Urban Graphs for Multi-Scalar Urban Analytics. In 19th International Conference on Computational Urban Planning & Urban Management, CUPUM 2025. https://doi.org/10.17605/OSF.IO/ABYQH
+[1] Yap, W., Stouffs, R. & Biljecki, F. Urbanity: automated modelling and analysis of multidimensional networks in cities. npj Urban Sustain 3, 45 (2023). https://doi.org/10.1038/s42949-023-00125-w
 
-Yap, W., Stouffs, R. & Biljecki, F. Urbanity: automated modelling and analysis of multidimensional networks in cities. npj Urban Sustain 3, 45 (2023). https://doi.org/10.1038/s42949-023-00125-w
+[2] Yap, W., Chang, J. H., & Biljecki, F. (2023). Incorporating networks in semantic understanding of streetscapes: Contextualising active mobility decisions. Environment and Planning B: Urban Analytics and City Science, 50(6), 1416-1437. https://doi.org/10.1177/23998083221138832
 
-Yap, W., Biljecki, F. A Global Feature-Rich Network Dataset of Cities and Dashboard for Comprehensive Urban Analyses. Sci Data 10, 667 (2023). https://doi.org/10.1038/s41597-023-02578-1
+[3] Yap, W., Biljecki, F. A Global Feature-Rich Network Dataset of Cities and Dashboard for Comprehensive Urban Analyses. Sci Data 10, 667 (2023). https://doi.org/10.1038/s41597-023-02578-1
 
-Yap, W., Chang, J. H., & Biljecki, F. (2023). Incorporating networks in semantic understanding of streetscapes: Contextualising active mobility decisions. Environment and Planning B: Urban Analytics and City Science, 50(6), 1416-1437. https://doi.org/10.1177/23998083221138832
+[4] Yap, W., Biljecki, F. (2025, June). Leveraging Urban Graphs for Multi-Scalar Urban Analytics. In 19th International Conference on Computational Urban Planning & Urban Management, CUPUM 2025. https://doi.org/10.17605/OSF.IO/ABYQH
+
+[5] Yap, W., Wu, A. N., Miller, C., & Biljecki, F. (2025). Revealing building operating carbon dynamics for multiple cities. Nature Sustainability, 8(1), 1199-1210. https://doi.org/10.1038/s41893-025-01615-8
+
+
 
 ## License
 
