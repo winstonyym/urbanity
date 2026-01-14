@@ -41,7 +41,6 @@ from torch.utils.data import Dataset, DataLoader
 
 from PIL import Image
 from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
-
 NUM_CLASSES = 65
 
 CLS_DICT = {'0': 'Bird',
@@ -1512,3 +1511,137 @@ def display_segmentation_grid(
     if save_path:
         plt.savefig(save_path, bbox_inches='tight', dpi=180)
     plt.show()
+
+
+def fill_attributes_by_graph(
+    gdf,
+    aggr_cols,
+    restrict_within_street=False,
+    weight_col=None,
+    inplace=False,
+):
+
+    if not inplace:
+        gdf = gdf.copy()
+
+    # Build MultiGraph
+    G = nx.MultiGraph()
+    for idx, row in gdf.iterrows():
+        u, v = row["u"], row["v"]
+        data = {"idx": idx}
+        if weight_col is not None and (weight_col in gdf.columns) and pd.notna(row.get(weight_col)):
+            data[weight_col] = row[weight_col]
+        G.add_edge(u, v, key=idx, **data)
+
+    def _incident_edge_indices(node):
+        if node not in G:
+            return []
+        idxs = []
+        for _, keyed in G[node].items():
+            for _, d in keyed.items():
+                idxs.append(d["idx"])
+        return idxs
+
+    def _nearest_seed_values(seed_values_per_node):
+        import heapq
+        dist = {n: np.inf for n in G.nodes}
+        val = {n: np.nan for n in G.nodes}
+        h = []
+        for n, sv in seed_values_per_node.items():
+            if not np.isnan(sv):
+                dist[n] = 0.0
+                val[n] = sv
+                heapq.heappush(h, (0.0, n, sv))
+
+        def _edge_weight(n, nbr):
+            if weight_col is None:
+                return 1.0
+            weights = [d.get(weight_col, 1.0) for _, d in G[n][nbr].items()]
+            return min(weights) if weights else 1.0
+
+        visited = set()
+        while h:
+            d, n, sv = heapq.heappop(h)
+            if n in visited:
+                continue
+            visited.add(n)
+            dist[n] = d
+            val[n] = sv
+            for nbr in G.neighbors(n):
+                if nbr in visited:
+                    continue
+                nd = d + _edge_weight(n, nbr)
+                heapq.heappush(h, (nd, nbr, sv))
+        return val, dist
+
+    summary = {}
+    street_groups = [("ALL", gdf.index)]
+    if restrict_within_street:
+        street_groups = list(gdf.groupby("street_id").groups.items())
+
+    for col in aggr_cols:
+
+        filled_count_total = 0
+        for _, idxs in street_groups:
+            rows_idx = pd.Index(idxs)
+
+            nodes_in_group = set(gdf.loc[rows_idx, "u"]).union(set(gdf.loc[rows_idx, "v"]))
+
+            node_seeds = {}
+            for n in nodes_in_group:
+                vals = []
+                for eidx in _incident_edge_indices(n):
+                    if eidx in rows_idx:
+                        v = gdf.at[eidx, col]
+                        if pd.notna(v):
+                            vals.append(v)
+                node_seeds[n] = np.mean(vals) if len(vals) else np.nan
+
+            if not any(pd.notna(v) for v in node_seeds.values()):
+                continue
+
+            node_val, _ = _nearest_seed_values(node_seeds)
+
+            # ✅ Correct row boolean indexing
+            missing_mask = gdf.loc[rows_idx, col].isna()
+            if not missing_mask.any():
+                continue
+            eidxs_to_fill = missing_mask.index[missing_mask.values]
+
+            for eidx in eidxs_to_fill:
+                u = gdf.at[eidx, "u"]
+                v = gdf.at[eidx, "v"]
+                candidates = [node_val.get(u, np.nan), node_val.get(v, np.nan)]
+                candidates = [c for c in candidates if pd.notna(c)]
+                if candidates:
+                    gdf.at[eidx, col] = float(np.mean(candidates))
+                    filled_count_total += 1
+
+
+    return gdf
+
+def fill_street_network(image_gdf, street_gdf, v_threshold=1):
+
+    image_gdf_mod = image_gdf.copy()
+    street_gdf_mod = street_gdf.copy()
+    
+    # Remove images with low complexity
+    image_gdf_mod = image_gdf_mod[image_gdf_mod['Visual Complexity']>=v_threshold]
+
+    # Get target columns
+    aggr_cols = ['nearest_street_id'] + list(image_gdf_mod.columns[9:])
+
+    # Get mean of each street
+    image_gdf_grouped = image_gdf_mod[aggr_cols].groupby(['nearest_street_id']).mean().reset_index()
+    image_gdf_grouped = image_gdf_grouped.rename(columns={'nearest_street_id':'street_id'})
+
+    # Merge to street
+    street_gdf_mod = street_gdf_mod.merge(image_gdf_grouped, how='left', on = 'street_id')
+
+    filled_gdf = fill_attributes_by_graph(street_gdf_mod,
+                                        aggr_cols=aggr_cols[1:],
+                                        restrict_within_street=False,  # set True to keep propagation within each street_id
+                                        weight_col=None,               # or e.g. "length_m" if available
+                                        inplace=False
+                                        )
+    return filled_gdf

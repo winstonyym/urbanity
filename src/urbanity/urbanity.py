@@ -88,6 +88,7 @@ class Map(ipyleaflet.Map):
         self.plot_geom = None
         self.objects = None
         self.connections = None
+        self.segmented_image = None
 
         if os.path.isdir('./data'):
             self.directory = "./data"
@@ -434,6 +435,8 @@ class Map(ipyleaflet.Map):
             bandwidth: int = 100,
             network_type: str = 'driving',
             add_svi: bool = True,
+            segment_svi: bool = True,
+            fill_svi_gaps: str = 'local',
             bin_distance: int = 20,
             proximity_distance: int = 10):
         """Method to assign urban network layer information (optionally add SVI from Mapillary). 
@@ -444,8 +447,11 @@ class Map(ipyleaflet.Map):
             network_filepath (str): Specify path to osm.pbf file.
             bandwidth (int): Distance to extract information beyond network. Defaults to 100.
             network_type (str): Specified OpenStreetMap transportation mode. Defaults to 'driving'.
-            add_svi (bool): If True, collect street view imagery data from Mapillary and add it to network.
-            sample_svi_distance (int): Distance to sample SVI for computational tractibility. Defaults to sampling one image every 20 meters.
+            add_svi (bool): If True, collect street view imagery data from Mapillary and add it to network. Defaults to True.
+            segment_svi (bool): If True, segments SVI based on street segments. Defaults to True.
+            fill_svi_gaps (str): Specify approach to fill gaps in SVI data. Accepts one of ['local', 'spatial_tile', 'global']. If 'local', semantic indicators are propagated along network edges from neighboring streets. 
+            If 'spatial_tile', the average within each tile based on Mapillary vector tile ID (zoom 14) is imputed for streets. Else, 'global' uses the global average mean value for the entire planning area. Defaults to 'local'. 
+            bin_distance (int): Distance to sample SVI for computational tractibility. Defaults to sampling one image every 20 meters.
             proximity_distance (int): Distance to include SVI based on adjacent distance to street segment. Defaults to 10 meters and excludes points that fall beyond this distance. 
         """
 
@@ -574,14 +580,289 @@ class Map(ipyleaflet.Map):
 
             print(f'Network constructed. Time taken: {round(time.time() - start)}.')
 
-            # Add SVI information from Mapillary
-            if add_svi:
+            if self.all_svi is None and add_svi:
+
                 image_gdf = parallel_download_image_in_tiles(self.polygon_bounds, api_key=MAPILLARY_API_TOKEN)
                 svi_gdf = assign_closest_points_to_linestring_and_sample(image_gdf, edges, bin_distance = bin_distance)
+
+                # Assign svis to map properties
+                self.all_svi = image_gdf
+                self.svi = svi_gdf
+
+            if self.segmented_image is None and segment_svi:
+
+                import torch
+                from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
+                from .svi import parallel_segment_images
+
+                processor = AutoImageProcessor.from_pretrained("facebook/mask2former-swin-large-mapillary-vistas-semantic", use_fast=True)
+                model = Mask2FormerForUniversalSegmentation.from_pretrained("facebook/mask2former-swin-large-mapillary-vistas-semantic")
+                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                model.to(device)
+
+                now = time.time()
+
+                segmented_images = parallel_segment_images(self.svi, 
+                                                        processor,
+                                                        model,
+                                                        MAPILLARY_API_TOKEN, 
+                                                        device)
+                print(f'Time taken for image segmentation: {time.time()-now} seconds.')
             
-            # Assign svis to map properties
-            self.all_svi = image_gdf
-            self.svi = svi_gdf
+                self.segmented_image = segmented_images
+            
+            if fill_svi_gaps == 'local':
+                self.network[2] = self.network[2].iloc[:,:5]
+                from .svi import fill_street_network
+                segmented_network = fill_street_network(self.segmented_image, self.network[2])
+                self.network[2] = segmented_network
+
+            elif fill_svi_gaps == 'global':
+                # Columns to aggregate from segmented images
+                aggr_cols = ['nearest_street_id'] + list(self.segmented_image.columns[9:])
+
+                # Keep base street attributes
+                self.network[2] = self.network[2].iloc[:, :5]
+
+                # Compute mean per street
+                image_gdf_grouped = (
+                    self.segmented_image[aggr_cols]
+                    .groupby('nearest_street_id', as_index=False)
+                    .mean()
+                    .rename(columns={'nearest_street_id': 'street_id'})
+                )
+
+                # Merge street-level image statistics
+                self.network[2] = self.network[2].merge(
+                    image_gdf_grouped,
+                    how='left',
+                    on='street_id'
+                )
+
+                # Fill missing values in using street-level means
+                mean_cols = image_gdf_grouped.columns.drop('street_id')
+
+                for col in mean_cols:
+                    if col in self.network[2].columns:
+                        self.network[2][col] = self.network[2][col].fillna(
+                            self.network[2][col].mean()
+                        )
+
+            elif fill_svi_gaps == 'spatial_tile':
+                # Keep base street attributes
+                aggr_cols = list(self.segmented_image.columns[9:])
+                self.network[2] = self.network[2].iloc[:, :5]
+
+                tile_gdf = get_tile_geometry(buffered_tp)
+                tile_gdf = tile_gdf.set_crs(self.polygon_bounds.crs)
+                proj_tile_gdf = project_gdf(tile_gdf)
+                proj_edges = project_gdf(self.network[2])
+                proj_edges['geometry'] = proj_edges.geometry.centroid
+
+                tile_network_gdf = proj_edges.overlay(proj_tile_gdf)[['street_id', 'tile_id']]
+
+                self.network[2] = self.network[2].merge(
+                    tile_network_gdf[['street_id', 'tile_id']],
+                    how='left',
+                    on='street_id'
+                )
+
+                # --------------------------------------------------
+                # 3. Compute TILE-level means
+                # --------------------------------------------------
+                tile_mean = (
+                    self.segmented_image
+                    .groupby('tile_id', as_index=False)[aggr_cols]
+                    .mean()
+                    .rename(columns={c: f"{c}_tile" for c in aggr_cols})
+                )
+
+                self.network[2] = self.network[2].merge(
+                    tile_mean,
+                    how='left',
+                    on='tile_id'
+                )
+
+                # --------------------------------------------------
+                # 4. Compute STREET-level means
+                # --------------------------------------------------
+                street_mean = (
+                    self.segmented_image[['nearest_street_id'] + aggr_cols]
+                    .groupby('nearest_street_id', as_index=False)
+                    .mean()
+                    .rename(columns={'nearest_street_id': 'street_id'})
+                )
+
+                self.network[2] = self.network[2].merge(
+                    street_mean,
+                    how='left',
+                    on='street_id'
+                )
+
+                # --------------------------------------------------
+                # 5. Hierarchical filling: street → tile → global
+                # --------------------------------------------------
+                for col in aggr_cols:
+                    self.network[2][col] = (
+                        self.network[2][col]
+                        .fillna(self.network[2][f"{col}_tile"])
+                        .fillna(self.network[2][col].mean())
+                    )
+
+                # --------------------------------------------------
+                # 6. Cleanup helper columns
+                # --------------------------------------------------
+                self.network[2].drop(
+                    columns=[f"{c}_tile" for c in aggr_cols],
+                    inplace=True
+                )
+
+            
+    def get_building_layer(
+            self, 
+            location: str = '',
+            network_filepath: str = '', 
+            bandwidth: int = 100,
+        ):
+        """Method to collect building layer
+
+        Args:
+            location (str): Accepts city name or country name to obtain OpenStreetMap data.
+        """
+
+        # If precomputed available, use precomputed
+        self.location = location
+        start = time.time()
+
+        if self.network:
+            print('Network data found, skipping re-computation')
+            G_buff_trunc_loop, nodes, edges = self.network[0], self.network[1], self.network[2]
+            original_bbox = self.polygon_bounds.geometry[0]
+            buffered_tp = self.polygon_bounds.copy()
+            buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+            buffered_bbox = buffered_tp.geometry.values[0]
+            './data/'
+            osm = pyrosm.OSM('./data/temp.osm.pbf', bounding_box=buffered_bbox)
+        else:
+            if network_filepath == '':
+                try:
+                    fp = get_data(self.location, directory = self.directory)
+                    print('Creating data folder and downloading osm street data...')
+                except ValueError:
+                    fp = get_data(self.country, directory = self.directory)
+                    print(f"ValueError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+                except ValueError:
+                    raise ValueError('No osm data found for specified location.')
+
+                network_filepath = fp
+                print('Data extracted successfully. Proceeding to construct street network.')
+
+            # Project and buffer original polygon to examine nodes outside boundary
+            try:
+                original_bbox = self.polygon_bounds.geometry[0]
+                buffered_tp = self.polygon_bounds.copy()
+                buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+                buffered_bbox = buffered_tp.geometry.values[0]
+            # catch when it hasn't even been defined 
+            except (AttributeError, NameError):
+                raise Exception('Please delimit a bounding box.')
+            
+            # Obtain nodes and edges within buffered polygon
+            data_root = './data/'
+            if not os.path.exists(data_root):
+                os.makedirs(data_root)
+
+            poly_path = os.path.join(data_root, 'temp.poly')
+            osm_path = os.path.join(data_root, 'temp.osm.pbf')
+
+            if os.path.isfile(poly_path):
+                os.remove(poly_path)
+
+            if os.path.isfile(osm_path):
+                os.remove(osm_path)
+            self.polygon_bounds = self.polygon_bounds[['geometry']]
+            self.polygon_bounds = self.polygon_bounds.reset_index()
+            self.polygon_bounds.columns = ['boundary_id', 'geometry']
+
+            gdf_to_poly(self.polygon_bounds, poly_path, column='boundary_id')
+            cmd = [
+                    "osmium", "extract", 
+                    "-p", poly_path,
+                    network_filepath,
+                    "-o", osm_path
+                ]
+
+            subprocess.run(cmd, capture_output=False, text=True)
+
+            osm = pyrosm.OSM(osm_path, bounding_box=buffered_bbox)
+            
+        # Collect buildings from osm 
+        buildings = osm.get_buildings()
+
+        # Process geometry and attributes for Overture buildings
+        buildings = preprocess_osm_building_geometry(buildings, minimum_area=30)
+        # building_polygon = preprocess_osm_building_attributes(building_polygon, return_class_height=False)
+
+        # Obtain unique ids for buildings
+        buildings = assign_numerical_id_suffix(buildings, 'osm')
+
+        id_col = 'osm_id'
+
+        buildings['bid'] = buildings[id_col]
+        buildings['bid_area'] = buildings.geometry.area
+        buildings['bid_perimeter'] = buildings.geometry.length
+        building_centroids = buildings.geometry.centroid
+        buildings['bid_centroid'] = buildings.geometry.centroid
+        buildings = buildings[['bid', 'bid_area', 'bid_perimeter', 'bid_centroid', 'geometry']]
+
+        # Compute building attributes
+        buildings = compute_circularcompactness(buildings, element='bid')
+        buildings = compute_convexity(buildings, element='bid')
+        buildings = compute_corners(buildings, element='bid')
+        buildings = compute_elongation(buildings, element='bid')
+        buildings = compute_orientation(buildings, element='bid')
+        # building_polygon = compute_shared_wall_ratio(building_polygon, element='bid')
+        buildings = compute_longest_axis_length(buildings, element='bid')
+        buildings = compute_equivalent_rectangular_index(buildings, element='bid')
+        buildings = compute_fractaldim(buildings, element='bid')
+        buildings = compute_rectangularity(buildings, element='bid')
+        buildings = compute_square_compactness(buildings, element='bid')
+        buildings = compute_shape_index(buildings, element='bid')
+        buildings = compute_squareness(buildings, element='bid')
+        buildings = compute_complexity(buildings, element='bid')
+
+        # Compute building heights
+        ghs_global_grid_path = pkg_resources.resource_filename('urbanity', 'ghs_data/global_ghs_grid.parquet')
+        ghs_global_grid = gpd.read_parquet(ghs_global_grid_path)
+        
+        overlapping_grid = ghs_global_grid.overlay(buffered_tp)
+
+        ghs_building_height_path = pkg_resources.resource_filename('urbanity', 'building_height_data/building_grids.json')
+        with open(ghs_building_height_path) as f:
+            building_height_links = json.load(f)
+
+        # If only one tile
+        if len(overlapping_grid) == 1:
+            row, col = overlapping_grid['row'].values.item(), overlapping_grid['col'].values.item()
+            target_key = f"R{row}C{col}.parquet"
+
+            buildings = get_and_assign_building_heights(building_height_links[target_key], target_key, buildings)
+
+        elif len(overlapping_grid) > 1: 
+            building_height_list = []
+            for i, row in overlapping_grid.iterrows():
+                row, col = overlapping_grid['row'].values.item(), overlapping_grid['col'].values.item()
+                target_key = f"R{row}C{col}.parquet"
+                building_height = get_building_heights(target_key, target_key)
+                building_height_list.append(building_height)
+            combined_df = pd.concat(building_height_list)
+            combined_gdf = gpd.GeoDataFrame(combined_df, crs='epsg:4326', geometry=combined_df['geometry'])
+
+            buildings = assign_building_heights(combined_gdf, target_key, buildings)
+
+        # buildings = buildings.drop(columns=['bid_centroid'])
+        buildings['bid'] = buildings['bid'].astype(str)
+        self.buildings = buildings
 
     def get_street_network(
             self, 
