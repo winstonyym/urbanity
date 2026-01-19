@@ -438,6 +438,7 @@ class Map(ipyleaflet.Map):
             segment_svi: bool = True,
             fill_svi_gaps: str = 'local',
             bin_distance: int = 20,
+            v_threshold: float = 1.0,
             proximity_distance: int = 10):
         """Method to assign urban network layer information (optionally add SVI from Mapillary). 
         Bandwidth (m) can be specified to buffer network, obtaining neighbouring nodes within buffered area of network.
@@ -452,6 +453,7 @@ class Map(ipyleaflet.Map):
             fill_svi_gaps (str): Specify approach to fill gaps in SVI data. Accepts one of ['local', 'spatial_tile', 'global']. If 'local', semantic indicators are propagated along network edges from neighboring streets. 
             If 'spatial_tile', the average within each tile based on Mapillary vector tile ID (zoom 14) is imputed for streets. Else, 'global' uses the global average mean value for the entire planning area. Defaults to 'local'. 
             bin_distance (int): Distance to sample SVI for computational tractibility. Defaults to sampling one image every 20 meters.
+            v_threshold (float): Minimum visual complexity threshold to retain segmented images. Defaults to 1.0.
             proximity_distance (int): Distance to include SVI based on adjacent distance to street segment. Defaults to 10 meters and excludes points that fall beyond this distance. 
         """
 
@@ -580,142 +582,144 @@ class Map(ipyleaflet.Map):
 
             print(f'Network constructed. Time taken: {round(time.time() - start)}.')
 
-            if self.all_svi is None and add_svi:
+        if self.all_svi is None and add_svi:
 
-                image_gdf = parallel_download_image_in_tiles(self.polygon_bounds, api_key=MAPILLARY_API_TOKEN)
-                svi_gdf = assign_closest_points_to_linestring_and_sample(image_gdf, edges, bin_distance = bin_distance)
+            image_gdf = parallel_download_image_in_tiles(self.polygon_bounds, api_key=MAPILLARY_API_TOKEN)
+            svi_gdf = assign_closest_points_to_linestring_and_sample(image_gdf, edges, bin_distance = bin_distance)
 
-                # Assign svis to map properties
-                self.all_svi = image_gdf
-                self.svi = svi_gdf
+            # Assign svis to map properties
+            self.all_svi = image_gdf
+            self.svi = svi_gdf
 
-            if self.segmented_image is None and segment_svi:
+        if self.segmented_image is None and segment_svi:
 
-                import torch
-                from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
-                from .svi import parallel_segment_images
+            import torch
+            from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
+            from .svi import parallel_segment_images
 
-                processor = AutoImageProcessor.from_pretrained("facebook/mask2former-swin-large-mapillary-vistas-semantic", use_fast=True)
-                model = Mask2FormerForUniversalSegmentation.from_pretrained("facebook/mask2former-swin-large-mapillary-vistas-semantic")
-                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                model.to(device)
+            processor = AutoImageProcessor.from_pretrained("facebook/mask2former-swin-large-mapillary-vistas-semantic", use_fast=True)
+            model = Mask2FormerForUniversalSegmentation.from_pretrained("facebook/mask2former-swin-large-mapillary-vistas-semantic")
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            model.to(device)
 
-                now = time.time()
+            now = time.time()
 
-                segmented_images = parallel_segment_images(self.svi, 
-                                                        processor,
-                                                        model,
-                                                        MAPILLARY_API_TOKEN, 
-                                                        device)
-                print(f'Time taken for image segmentation: {time.time()-now} seconds.')
-            
-                self.segmented_image = segmented_images
-            
-            if fill_svi_gaps == 'local':
-                self.network[2] = self.network[2].iloc[:,:5]
-                from .svi import fill_street_network
-                segmented_network = fill_street_network(self.segmented_image, self.network[2])
-                self.network[2] = segmented_network
+            segmented_images = parallel_segment_images(self.svi, 
+                                                    processor,
+                                                    model,
+                                                    MAPILLARY_API_TOKEN, 
+                                                    device)
+            print(f'Time taken for image segmentation: {time.time()-now} seconds.')
 
-            elif fill_svi_gaps == 'global':
-                # Columns to aggregate from segmented images
-                aggr_cols = ['nearest_street_id'] + list(self.segmented_image.columns[9:])
+            segmented_images = segmented_images[segmented_images['Visual Complexity']>=v_threshold]
+        
+            self.segmented_image = segmented_images
+        
+        if fill_svi_gaps == 'local':
+            self.network[2] = self.network[2].iloc[:,:5]
+            from .svi import fill_street_network
+            segmented_network = fill_street_network(self.segmented_image, self.network[2])
+            self.network[2] = segmented_network
 
-                # Keep base street attributes
-                self.network[2] = self.network[2].iloc[:, :5]
+        elif fill_svi_gaps == 'global':
+            # Columns to aggregate from segmented images
+            aggr_cols = ['nearest_street_id'] + list(self.segmented_image.columns[9:])
 
-                # Compute mean per street
-                image_gdf_grouped = (
-                    self.segmented_image[aggr_cols]
-                    .groupby('nearest_street_id', as_index=False)
-                    .mean()
-                    .rename(columns={'nearest_street_id': 'street_id'})
-                )
+            # Keep base street attributes
+            self.network[2] = self.network[2].iloc[:, :5]
 
-                # Merge street-level image statistics
-                self.network[2] = self.network[2].merge(
-                    image_gdf_grouped,
-                    how='left',
-                    on='street_id'
-                )
+            # Compute mean per street
+            image_gdf_grouped = (
+                self.segmented_image[aggr_cols]
+                .groupby('nearest_street_id', as_index=False)
+                .mean()
+                .rename(columns={'nearest_street_id': 'street_id'})
+            )
 
-                # Fill missing values in using street-level means
-                mean_cols = image_gdf_grouped.columns.drop('street_id')
+            # Merge street-level image statistics
+            self.network[2] = self.network[2].merge(
+                image_gdf_grouped,
+                how='left',
+                on='street_id'
+            )
 
-                for col in mean_cols:
-                    if col in self.network[2].columns:
-                        self.network[2][col] = self.network[2][col].fillna(
-                            self.network[2][col].mean()
-                        )
+            # Fill missing values in using street-level means
+            mean_cols = image_gdf_grouped.columns.drop('street_id')
 
-            elif fill_svi_gaps == 'spatial_tile':
-                # Keep base street attributes
-                aggr_cols = list(self.segmented_image.columns[9:])
-                self.network[2] = self.network[2].iloc[:, :5]
-
-                tile_gdf = get_tile_geometry(buffered_tp)
-                tile_gdf = tile_gdf.set_crs(self.polygon_bounds.crs)
-                proj_tile_gdf = project_gdf(tile_gdf)
-                proj_edges = project_gdf(self.network[2])
-                proj_edges['geometry'] = proj_edges.geometry.centroid
-
-                tile_network_gdf = proj_edges.overlay(proj_tile_gdf)[['street_id', 'tile_id']]
-
-                self.network[2] = self.network[2].merge(
-                    tile_network_gdf[['street_id', 'tile_id']],
-                    how='left',
-                    on='street_id'
-                )
-
-                # --------------------------------------------------
-                # 3. Compute TILE-level means
-                # --------------------------------------------------
-                tile_mean = (
-                    self.segmented_image
-                    .groupby('tile_id', as_index=False)[aggr_cols]
-                    .mean()
-                    .rename(columns={c: f"{c}_tile" for c in aggr_cols})
-                )
-
-                self.network[2] = self.network[2].merge(
-                    tile_mean,
-                    how='left',
-                    on='tile_id'
-                )
-
-                # --------------------------------------------------
-                # 4. Compute STREET-level means
-                # --------------------------------------------------
-                street_mean = (
-                    self.segmented_image[['nearest_street_id'] + aggr_cols]
-                    .groupby('nearest_street_id', as_index=False)
-                    .mean()
-                    .rename(columns={'nearest_street_id': 'street_id'})
-                )
-
-                self.network[2] = self.network[2].merge(
-                    street_mean,
-                    how='left',
-                    on='street_id'
-                )
-
-                # --------------------------------------------------
-                # 5. Hierarchical filling: street → tile → global
-                # --------------------------------------------------
-                for col in aggr_cols:
-                    self.network[2][col] = (
-                        self.network[2][col]
-                        .fillna(self.network[2][f"{col}_tile"])
-                        .fillna(self.network[2][col].mean())
+            for col in mean_cols:
+                if col in self.network[2].columns:
+                    self.network[2][col] = self.network[2][col].fillna(
+                        self.network[2][col].mean()
                     )
 
-                # --------------------------------------------------
-                # 6. Cleanup helper columns
-                # --------------------------------------------------
-                self.network[2].drop(
-                    columns=[f"{c}_tile" for c in aggr_cols],
-                    inplace=True
+        elif fill_svi_gaps == 'spatial_tile':
+            # Keep base street attributes
+            aggr_cols = list(self.segmented_image.columns[9:])
+            self.network[2] = self.network[2].iloc[:, :5]
+
+            tile_gdf = get_tile_geometry(buffered_tp)
+            tile_gdf = tile_gdf.set_crs(self.polygon_bounds.crs)
+            proj_tile_gdf = project_gdf(tile_gdf)
+            proj_edges = project_gdf(self.network[2])
+            proj_edges['geometry'] = proj_edges.geometry.centroid
+
+            tile_network_gdf = proj_edges.overlay(proj_tile_gdf)[['street_id', 'tile_id']]
+
+            self.network[2] = self.network[2].merge(
+                tile_network_gdf[['street_id', 'tile_id']],
+                how='left',
+                on='street_id'
+            )
+
+            # --------------------------------------------------
+            # 3. Compute TILE-level means
+            # --------------------------------------------------
+            tile_mean = (
+                self.segmented_image
+                .groupby('tile_id', as_index=False)[aggr_cols]
+                .mean()
+                .rename(columns={c: f"{c}_tile" for c in aggr_cols})
+            )
+
+            self.network[2] = self.network[2].merge(
+                tile_mean,
+                how='left',
+                on='tile_id'
+            )
+
+            # --------------------------------------------------
+            # 4. Compute STREET-level means
+            # --------------------------------------------------
+            street_mean = (
+                self.segmented_image[['nearest_street_id'] + aggr_cols]
+                .groupby('nearest_street_id', as_index=False)
+                .mean()
+                .rename(columns={'nearest_street_id': 'street_id'})
+            )
+
+            self.network[2] = self.network[2].merge(
+                street_mean,
+                how='left',
+                on='street_id'
+            )
+
+            # --------------------------------------------------
+            # 5. Hierarchical filling: street → tile → global
+            # --------------------------------------------------
+            for col in aggr_cols:
+                self.network[2][col] = (
+                    self.network[2][col]
+                    .fillna(self.network[2][f"{col}_tile"])
+                    .fillna(self.network[2][col].mean())
                 )
+
+            # --------------------------------------------------
+            # 6. Cleanup helper columns
+            # --------------------------------------------------
+            self.network[2].drop(
+                columns=[f"{c}_tile" for c in aggr_cols],
+                inplace=True
+            )
 
             
     def get_building_layer(

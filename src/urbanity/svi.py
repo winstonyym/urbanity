@@ -1620,13 +1620,11 @@ def fill_attributes_by_graph(
 
     return gdf
 
-def fill_street_network(image_gdf, street_gdf, v_threshold=1):
+def fill_street_network(image_gdf, street_gdf):
 
     image_gdf_mod = image_gdf.copy()
     street_gdf_mod = street_gdf.copy()
-    
-    # Remove images with low complexity
-    image_gdf_mod = image_gdf_mod[image_gdf_mod['Visual Complexity']>=v_threshold]
+
 
     # Get target columns
     aggr_cols = ['nearest_street_id'] + list(image_gdf_mod.columns[9:])
