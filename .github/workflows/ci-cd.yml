@@ -4,63 +4,66 @@ on: [push, pull_request]
 
 jobs:
   ci:
-    # Set up operating system
     runs-on: ubuntu-latest
 
-    # Define job steps
     steps:
+      - name: Check-out repository
+        uses: actions/checkout@v4
+
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
           python-version: "3.9"
 
-      - name: Check-out repository
-        uses: actions/checkout@v2
-
-      - name: Install poetry
-        uses: snok/install-poetry@v1
+      - name: Install Poetry
+        run: |
+          python -m pip install --upgrade pip
+          pip install pipx
+          pipx install poetry==1.7.1
+          pipx ensurepath
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Install package
-        run: poetry install
+        run: poetry install --no-interaction --no-root
 
       # - name: Test with pytest
       #   run: poetry run pytest tests/ --cov=urbanity --cov-report=xml
 
       # - name: Use Codecov to track coverage
-      #   uses: codecov/codecov-action@v2
+      #   uses: codecov/codecov-action@v4
       #   with:
-      #     files: ./coverage.xml   # coverage report
+      #     files: ./coverage.xml
 
       - name: Build documentation
         run: poetry run make clean html --directory docs/
 
   cd:
-    # Only run this job if the "ci" job passes
     needs: ci
-
-    # Only run this job if new work is pushed to "main"
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
-    # Set up operating system
     runs-on: ubuntu-latest
 
-    # Define job steps
     steps:
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: "3.9"
-
       - name: Check-out repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install poetry
-        uses: snok/install-poetry@v1
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install Poetry
+        run: |
+          python -m pip install --upgrade pip
+          pip install pipx
+          pipx install poetry==1.7.1
+          pipx ensurepath
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Install package
-        run: poetry install
+        run: poetry install --no-interaction --no-root
 
       # - name: Publish to PyPI
       #   uses: pypa/gh-action-pypi-publish@release/v1
