@@ -721,7 +721,138 @@ class Map(ipyleaflet.Map):
                 inplace=True
             )
 
+    def get_population_layer(
+            self,
+            population_layer = 'meta',
+            bandwidth: int = 100,
+            temporal_years: list = [2025]
+
+    ):
+        """Method to collect population layer
+        Args:
+            population_layer (str): Specify population layer to add. Accepts one of ['meta', 'ghs']. Defaults to 'meta'.
+        """
+                    # Project and buffer original polygon to examine nodes outside boundary
+        start = time.time()
+
+        try:
+            original_bbox = self.polygon_bounds.geometry[0]
+            buffered_tp = self.polygon_bounds.copy()
+            buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+            buffered_bbox = buffered_tp.geometry.values[0]
+        # catch when it hasn't even been defined 
+        except (AttributeError, NameError):
+            raise Exception('Please delimit a bounding box.')
+
+        # Add population
+        if self.population:
+            print('Population data found, skipping re-computation.')
+        else:
+            if population_layer == 'meta': 
+                print('Collecting Meta population counts...')
+                long_min, lat_min, long_max, lat_max = self.polygon_bounds.geometry.total_bounds
+
+                pop_subgroups = ['population', 'children', 'youth', 'elderly', 'men', 'women']
+                # Example usage
+                bounding_box = self.polygon_bounds.geometry.total_bounds  # Example bounding box (xmin, ymin, xmax, ymax)
+                
+                tile_countries_path = pkg_resources.resource_filename('urbanity', "map_data/tiled_data.json")
+                with open(tile_countries_path, 'r') as f:
+                    tile_dict = json.load(f)
+                    
+                tiled_country = [country[:-13] for country in list(tile_dict.keys())]
+                
+                # Use csv for small countries
+                if self.country not in tiled_country:
+                    print('Using non-tiled population data.')
+                    pop_list, target_cols = get_meta_population_data(self.country, 
+                                                                bounding_poly=self.polygon_bounds)
+                    
+                # If big country, use csv and custom tiled population data: (e.g. USA: https://figshare.com/articles/dataset/USA_TILE_POPULATION/21502296)
+                elif self.country in tiled_country:
+                    print('Using tiled population data.')
+                    pop_list, target_cols = get_tiled_population_data(self.country, bounding_poly = self.polygon_bounds)
+                
+                self.population = pop_list
+                self.target_cols = target_cols
             
+                groups = ['PopSum', 'Men', 'Women', 'Elderly','Youth','Children']
+                
+            if population_layer == 'ghs':
+                print('Adding GHS population counts to plots...')
+                # Load global tile dataframe and fine overlapping grid
+                ghs_global_grid_path = pkg_resources.resource_filename('urbanity', 'ghs_data/global_ghs_grid.parquet')
+                ghs_global_grid = gpd.read_parquet(ghs_global_grid_path)
+
+                overlapping_grid = ghs_global_grid.overlay(buffered_tp)
+                buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
+                # Loop through each year and obtain tif file
+                origin_gdf_pop = gpd.GeoDataFrame()
+
+                for k, year in enumerate(temporal_years):
+                    # Only compute geometry once
+                    if k == 0:
+                        # If only one tile
+                        if len(overlapping_grid) == 1:
+                            row, col = overlapping_grid['row'].values.item(), overlapping_grid['col'].values.item()
+                            target_tif_pop = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"
+                            raster_dataset_pop = download_pop_tiff_from_path(target_tif_pop)
+                            raster_gdf_pop = raster2gdf(raster_dataset_pop, zoom=True, boundary = buffered_tp, same_geometry=False)
+
+                        elif len(overlapping_grid) > 1: 
+                            raster_list_built = []
+                            raster_list_pop = []
+                            for i, row in overlapping_grid.iterrows():
+                                target_tif_pop = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row['row']}_C{row['col']}.zip"                           
+                                raster_dataset_pop = download_pop_tiff_from_path(target_tif_pop)
+                                raster_list_pop.append(raster_dataset_pop)
+
+                            # Merge rasters
+                            mosaic_pop = merge_raster_list(raster_list_pop)
+                            raster_gdf_pop = raster2gdf(mosaic_pop, zoom=True, boundary = buffered_tp, same_geometry=False)
+                        
+                        
+                        raster_gdf_pop.columns = [str(year), 'geometry']
+                        origin_gdf_pop = gpd.GeoDataFrame(pd.concat([origin_gdf_pop, raster_gdf_pop], axis=1))
+                        
+                    else:
+                        # If only one tile
+                        if len(overlapping_grid) == 1:
+                            row, col = overlapping_grid['row'].values.item(), overlapping_grid['col'].values.item()
+                            target_tif_pop = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row}_C{col}.zip"
+
+                            raster_dataset_pop = download_pop_tiff_from_path(target_tif_pop)
+
+                            raster_gdf_pop = raster2gdf(raster_dataset_pop, zoom=True, boundary = buffered_tp, same_geometry=True)
+
+                        elif len(overlapping_grid) > 1: 
+                            raster_list_pop = []
+
+                            for i, row in overlapping_grid.iterrows():
+                                target_tif_pop = f"https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_POP_GLOBE_R2023A/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss/V1-0/tiles/GHS_POP_E{year}_GLOBE_R2023A_4326_3ss_V1_0_R{row['row']}_C{row['col']}.zip"
+
+                                raster_dataset_pop = download_pop_tiff_from_path(target_tif_pop)
+
+                                raster_list_pop.append(raster_dataset_pop)
+
+                            # Merge rasters
+                            mosaic_pop = merge_raster_list(raster_list_pop)
+
+                            raster_gdf_pop = raster2gdf(mosaic_pop, zoom=True, boundary = buffered_tp, same_geometry=True)
+
+                        
+                        raster_gdf_pop.columns = [str(year)]
+                        origin_gdf_pop  = gpd.GeoDataFrame(pd.concat([origin_gdf_pop, raster_gdf_pop], axis=1)) 
+
+                temporal_rename_pop = {str(i):f'{i}_pop' for i in temporal_years}
+                temporal_pop_columns = [f'{i}_pop' for i in temporal_years]
+                origin_gdf_pop = origin_gdf_pop.rename(columns=temporal_rename_pop)
+                self.population = origin_gdf_pop
+
+            print(f'Population attributes computed. Time taken: {round(time.time() - start)}.')  
+        
+            
+                
     def get_building_layer(
             self, 
             location: str = '',
