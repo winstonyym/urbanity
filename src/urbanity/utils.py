@@ -2,6 +2,7 @@
 import os
 import io
 import re
+import math
 import json
 import time
 import requests
@@ -299,7 +300,7 @@ def get_country_centroids():
 
     return country_dict
 
-def get_population_data_links(country, use_tif = False):
+def get_population_data_links():
     """Obtain population data links based on specified country.
 
     Args:
@@ -896,3 +897,175 @@ def boundary_to_plot(plot, add_reverse=True):
         plot_to_boundary = np.flip(boundary_to_plot, axis=0)
     
     return boundary_to_plot, plot_to_boundary
+
+
+import difflib
+from shapely.geometry import mapping
+
+# Mapping from common alternative names to your target list names
+COUNTRY_NAME_ALIASES = {
+    # reverse geocoding quirks → your list names
+    "United States of America": "United States",
+    "USA": "United States",
+    "US": "United States",
+    "UK": "United Kingdom",
+    "Great Britain": "United Kingdom",
+    "Czechia": "Czechia",
+    "Czech Republic": "Czechia",
+    "Ivory Coast": "Côte d'Ivoire",
+    "Cote d'Ivoire": "Côte d'Ivoire",
+    "Eswatini": "Kingdom of Eswatini",
+    "Swaziland": "Kingdom of Eswatini",
+    "Tanzania": "United Republic of Tanzania",
+    "Luxembourg": "Luxemburg",
+    "India": "Pakistan & India",
+    "Pakistan": "Pakistan & India",
+    "Bosnia and Herzegovina": "Bosnia & Herzegovina",
+    "Nauru": "Naura",
+    "Republic of the Congo": "Congo",
+    "DR Congo": "Democratic Republic of the Congo",
+    "Micronesia": "Federated States of Micronesia",
+    "South Korea": "South Korea",
+    "Republic of Korea": "South Korea",
+    "Türkiye": "Turkey",
+    "Turkiye": "Turkey",
+    "Cabo Verde": "Cabo Verde",
+    "Cape Verde": "Cabo Verde",
+}
+
+# Your target extract list
+EXTRACT_NAMES = [
+    'Albania', 'Algeria', 'American Samoa', 'Andorra', 'Angola', 'Anguilla',
+    'Antigua and Barbuda', 'Argentina', 'Armenia', 'Aruba', 'Australia',
+    'Austria', 'Bahamas', 'Bahrain', 'Bangladesh', 'Barbados', 'Belarus',
+    'Belgium', 'Belize', 'Benin', 'Bhutan', 'Bolivia',
+    'Bosnia & Herzegovina', 'Botswana', 'Brazil', 'British Virgin Islands',
+    'Brunei', 'Bulgaria', 'Burkina Faso', 'Burundi', 'Cabo Verde',
+    'Cambodia', 'Cameroon', 'Cayman Islands', 'Central African Republic',
+    'Chad', 'Chile', 'Colombia', 'Comoros', 'Congo',
+    'Continent of Africa', 'Cook Islands', 'Costa Rica', 'Croatia',
+    'Czechia', "Côte d'Ivoire", 'Democratic Republic of the Congo',
+    'Denmark', 'Djibouti', 'Dominica', 'Dominican Republic', 'Ecuador',
+    'Egypt', 'El Salvador', 'Equatorial Guinea', 'Eritrea', 'Estonia',
+    'Ethiopia', 'Faroe Islands', 'Federated States of Micronesia', 'Fiji',
+    'Finland', 'France', 'French Guiana', 'French Polynesia', 'Gabon',
+    'Gambia', 'Georgia', 'Germany', 'Ghana', 'Gibraltar', 'Greece',
+    'Grenada', 'Guadeloupe', 'Guam', 'Guatemala', 'Guernsey', 'Guinea',
+    'Guinea-Bissau', 'Guyana', 'Haiti', 'Honduras', 'Hong Kong',
+    'Hungary', 'Iceland', 'Indonesia', 'Iraq', 'Ireland', 'Isle of Man',
+    'Italy', 'Jamaica', 'Japan', 'Jordan', 'Kazakhstan', 'Kenya',
+    'Kingdom of Eswatini', 'Kiribati', 'Kuwait', 'Kyrgyzstan', 'Laos',
+    'Latvia', 'Lebanon', 'Lesotho', 'Liberia', 'Libya', 'Liechtenstein',
+    'Lithuania', 'Luxemburg', 'Macau', 'Madagascar', 'Malawi', 'Malaysia',
+    'Maldives', 'Mali', 'Malta', 'Marshall Islands', 'Mauritania',
+    'Mauritius', 'Mayotte', 'Mexico', 'Moldova', 'Monaco', 'Mongolia',
+    'Montserrat', 'Mozambique', 'Namibia', 'Naura', 'Nepal',
+    'Netherlands', 'New Caledonia', 'New Zealand', 'Nicaragua', 'Niger',
+    'Nigeria', 'North Macedonia', 'Northern Mariana Islands', 'Norway',
+    'Oman', 'Pakistan & India', 'Palau', 'Panama', 'Papua New Guinea',
+    'Paraguay', 'Peru', 'Philippines', 'Poland', 'Portugal', 'Puerto Rico',
+    'Qatar', 'Romania', 'Rwanda', 'Réunion', 'Saint Kitts and Nevis',
+    'Saint Lucia', 'Saint Vincent and the Grenadines', 'Samoa',
+    'San Marino', 'Sao Tome and Principe', 'Saudi Arabia', 'Senegal',
+    'Serbia', 'Seychelles', 'Sierra Leone', 'Singapore', 'Slovakia',
+    'Slovenia', 'Solomon Islands', 'South Africa', 'South Korea', 'Spain',
+    'Sri Lanka', 'Suriname', 'Sweden', 'Switzerland', 'Taiwan',
+    'Tajikistan', 'Thailand', 'Timor-Leste', 'Togo', 'Tonga',
+    'Trinidad and Tobago', 'Tunisia', 'Turkey', 'Turkmenistan',
+    'Turks and Caicos', 'Tuvalu', 'US Virgin Islands', 'Uganda',
+    'Ukraine', 'United Arab Emirates', 'United Kingdom',
+    'United Republic of Tanzania', 'United States', 'Uruguay',
+    'Uzbekistan', 'Vanuatu', 'Vietnam', 'Wallis and Futuna Islands',
+    'Zambia', 'Zimbabwe',
+]
+
+
+def get_country_from_polygon(polygon_geometry):
+    """Determine which country a polygon is in using reverse geocoding,
+    then match to the extract name list.
+
+    Uses Nominatim (free, no key required) to reverse geocode the centroid.
+    Falls back to a representative point if the centroid is outside the polygon.
+
+    Parameters
+    ----------
+    polygon_geometry : shapely.geometry.Polygon or MultiPolygon
+
+    Returns
+    -------
+    str or None
+        Matched country name from EXTRACT_NAMES, or None if no match.
+    """
+    import requests
+
+    # Use representative_point (guaranteed inside the polygon) rather than
+    # centroid (which can fall outside concave shapes)
+    point = polygon_geometry.representative_point()
+    lat, lon = point.y, point.x
+
+    # Nominatim reverse geocoding
+    url = "https://nominatim.openstreetmap.org/reverse"
+    params = {
+        "lat": lat,
+        "lon": lon,
+        "format": "jsonv2",
+        "zoom": 3,  # country-level
+        "accept-language": "en",
+    }
+    headers = {"User-Agent": "osm-extract-downloader/1.0"}
+
+    resp = requests.get(url, params=params, headers=headers, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+
+    # Extract country name from response
+    country_raw = data.get("address", {}).get("country")
+    if not country_raw:
+        # Fallback: try the display_name (last component is usually the country)
+        display = data.get("display_name", "")
+        country_raw = display.split(",")[-1].strip() if display else None
+
+    if not country_raw:
+        return None
+
+    return _match_country_name(country_raw)
+
+
+def _match_country_name(country_raw):
+    """Match a raw country name to the extract name list.
+
+    Tries: exact match → alias lookup → fuzzy match.
+
+    Parameters
+    ----------
+    country_raw : str
+        Country name from reverse geocoding.
+
+    Returns
+    -------
+    str or None
+        Best matching name from EXTRACT_NAMES.
+    """
+    name = country_raw.strip()
+
+    # 1. Exact match
+    if name in EXTRACT_NAMES:
+        return name
+
+    # 2. Alias lookup
+    if name in COUNTRY_NAME_ALIASES:
+        alias = COUNTRY_NAME_ALIASES[name]
+        if alias in EXTRACT_NAMES:
+            return alias
+
+    # 3. Case-insensitive exact match
+    lower_map = {n.lower(): n for n in EXTRACT_NAMES}
+    if name.lower() in lower_map:
+        return lower_map[name.lower()]
+
+    # 4. Fuzzy match
+    matches = difflib.get_close_matches(name, EXTRACT_NAMES, n=1, cutoff=0.6)
+    if matches:
+        return matches[0]
+
+    return None

@@ -126,7 +126,7 @@ def get_meta_population_data(country: str, bounding_poly = None, all_only=False)
         pd.DataFrame/np.ndarray: Dataframe (csv) or array (tif) with population information
     """    
     
-    general_pop_dict = get_population_data_links(country)
+    general_pop_dict = get_population_data_links()
 
     try:
         general_pop_dict[country]
@@ -188,7 +188,7 @@ def get_tiled_population_data(country: str, bounding_poly = None, all_only = Fal
     groups_df = []
     target_cols = []
 
-    general_pop_dict = get_population_data_links(country)
+    general_pop_dict = get_population_data_links()
     minx, miny, maxx, maxy = bounding_poly.bounds['minx'].min(), bounding_poly.bounds['miny'].min(), bounding_poly.bounds['maxx'].max(), bounding_poly.bounds['maxy'].max()
 
     tile_polygon_path = pkg_resources.resource_filename('urbanity', 'map_data/tiled_data.json')

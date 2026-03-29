@@ -3644,7 +3644,6 @@ class Map(ipyleaflet.Map):
     
     def get_urban_graph(
             self, 
-            location: str = '',
             network_filepath: str = '', 
             svi_filepath: str = '',
             building_filepath: str = '',
@@ -3668,7 +3667,6 @@ class Map(ipyleaflet.Map):
         Bandwidth (m) can be specified to buffer network, obtaining neighbouring nodes within buffered area of network.
 
         Args:
-            location (str): Accepts city name or country name to obtain OpenStreetMap data.
             network_filepath (str): Specify path to osm.pbf file.
             svi_filepath (str): Specify path to street view imagery file.
             building_filepath (str): Specify path to overture building footprint file.
@@ -3707,8 +3705,13 @@ class Map(ipyleaflet.Map):
         """ 
         
         # If precomputed available, use precomputed
-        self.location = location
         start = time.time()
+        if self.polygon_bounds is None:
+            raise Exception('Please delimit a bounding box to construct the urban graph.')
+        
+        # Get country from polygon bounds
+        self.country = get_country_from_polygon(self.polygon_bounds.geometry[0]) 
+        print(self.country)
 
         if self.network:
             print('Network data found, skipping re-computation')
