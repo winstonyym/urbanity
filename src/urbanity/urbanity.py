@@ -42,8 +42,7 @@ except ImportError:  # pyrosm not installed
 from scipy.stats import entropy
 
 # import module functions and classes
-from .utils import get_country_centroids, finetune_poi, \
-                   get_available_precomputed_network_data, most_frequent, gdf_to_poly
+from .utils import *
 from .geom import *
 from .building import *
 from .svi import parallel_download_image_in_tiles, assign_closest_points_to_linestring_and_sample
@@ -3718,20 +3717,27 @@ class Map(ipyleaflet.Map):
             buffered_tp = self.polygon_bounds.copy()
             buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
             buffered_bbox = buffered_tp.geometry.values[0]
-            './data/'
             osm = pyrosm.OSM('./data/temp.osm.pbf', bounding_box=buffered_bbox)
         else:
             if network_filepath == '':
                 try:
-                    fp = get_data(self.location, directory = self.directory)
-                    print('Creating data folder and downloading osm street data...')
-                except ValueError:
-                    fp = get_data(self.country, directory = self.directory)
-                    print(f"ValueError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+                    extract = find_smallest_extract(
+                        aoi_geometry=self.polygon_bounds.geometry[0],
+                        data_dir=self.directory,
+                    )
+                    # Use source + name for the filename to avoid collisions
+                    filename = f"{extract['source']}_{os.path.basename(extract['url'])}"
+                    network_filepath = os.path.join(self.directory, filename)
+                    download_extract(extract["url"], network_filepath, expected_size=extract.get("size"))
+
+                #     fp = get_data(self.location, directory = self.directory)
+                #     print('Creating data folder and downloading osm street data...')
+                # except ValueError:
+                #     fp = get_data(self.country, directory = self.directory)
+                #     print(f"ValueError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
                 except ValueError:
                     raise ValueError('No osm data found for specified location.')
 
-                network_filepath = fp
                 print('Data extracted successfully. Proceeding to construct street network.')
 
             # Project and buffer original polygon to examine nodes outside boundary

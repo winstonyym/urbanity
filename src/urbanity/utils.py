@@ -1,12 +1,16 @@
 # Map class utility functions
 import os
 import io
+import re
 import json
+import time
+import requests
 import pandas as pd
 import pkg_resources
 import geopandas as gpd
 from shapely import wkt
-from shapely.geometry import LineString
+from shapely.geometry import LineString, shape, Polygon
+from shapely.ops import unary_union
 from urbanity.geom import project_gdf
 import numpy as np
 from IPython.display import display
@@ -15,6 +19,273 @@ from urllib.error import HTTPError
 from collections import Counter
 
 from urbanity.building import building_knn_nearest, compute_knn_aggregate
+
+
+GEOFABRIK_INDEX_URL = "https://download.geofabrik.de/index-v1.json"
+BBBIKE_BASE_URL = "https://download.bbbike.org/osm/bbbike"
+
+
+def fetch_geofabrik_index(cache_path="./data/geofabrik_index.json"):
+    """Fetch and cache the Geofabrik extract index (with geometries)."""
+    if os.path.exists(cache_path):
+        mtime = os.path.getmtime(cache_path)
+        if (time.time() - mtime) < 7 * 86400:
+            with open(cache_path) as f:
+                return json.load(f)
+
+    resp = requests.get(GEOFABRIK_INDEX_URL)
+    resp.raise_for_status()
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    with open(cache_path, "w") as f:
+        json.dump(resp.json(), f)
+    return resp.json()
+
+
+def _parse_geofabrik_candidates(index, aoi_geometry):
+    """Return candidate extracts from Geofabrik that fully contain the AOI."""
+    candidates = []
+    for feature in index["features"]:
+        props = feature["properties"]
+        if feature["geometry"] is None:
+            continue
+        extract_geom = shape(feature["geometry"])
+        if extract_geom.contains(aoi_geometry):
+            urls = props.get("urls", {})
+            pbf_url = urls.get("pbf")
+            if pbf_url:
+                size = props.get("pbf_file_size", float("inf"))
+                candidates.append({
+                    "source": "geofabrik",
+                    "name": props["name"],
+                    "url": pbf_url,
+                    "size": size,
+                })
+    return candidates
+
+
+# ---------------------------------------------------------------------------
+# BBBike helpers
+# ---------------------------------------------------------------------------
+
+def _parse_poly_file(text):
+    """Parse an Osmosis .poly file into a Shapely geometry."""
+    polygons = []
+    current_ring = []
+    is_hole = False
+
+    for line in text.strip().splitlines():
+        line = line.strip()
+        if line == "END":
+            if current_ring and len(current_ring) >= 3:
+                poly = Polygon(current_ring)
+                if poly.is_valid:
+                    polygons.append((poly, is_hole))
+            current_ring = []
+            is_hole = False
+            continue
+
+        # Section header (polygon name); "!" prefix means hole
+        parts = line.split()
+        if len(parts) == 1:
+            is_hole = line.startswith("!")
+            continue
+
+        # Coordinate line: longitude  latitude
+        try:
+            lon, lat = float(parts[0]), float(parts[1])
+            current_ring.append((lon, lat))
+        except (ValueError, IndexError):
+            continue
+
+    # Combine shells, subtract holes
+    shells = [p for p, h in polygons if not h]
+    holes = [p for p, h in polygons if h]
+    if not shells:
+        return None
+    result = unary_union(shells)
+    for hole in holes:
+        result = result.difference(hole)
+    return result
+
+
+def fetch_bbbike_index(cache_dir="./data/bbbike"):
+    """Build a BBBike index: list of cities with their boundary geometries.
+
+    Downloads the city list once, then lazily fetches .poly files.
+    Returns a list of dicts with keys: name, geometry, pbf_url.
+    The whole index is cached as a single JSON file.
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+    index_path = os.path.join(cache_dir, "bbbike_index.json")
+
+    # Return cached index if fresh
+    if os.path.exists(index_path):
+        mtime = os.path.getmtime(index_path)
+        if (time.time() - mtime) < 7 * 86400:
+            with open(index_path) as f:
+                return json.load(f)
+
+    # Step 1: get city list from the directory listing
+    resp = requests.get(f"{BBBIKE_BASE_URL}/")
+    resp.raise_for_status()
+    # Parse city names from href links like <a href="CityName/">
+    cities = re.findall(r'href="([A-Z][A-Za-z0-9_-]+)/"', resp.text)
+    # Filter out non-city entries
+    cities = [c for c in cities if c not in (".", "..")]
+
+    # Step 2: for each city, download the .poly file and parse it
+    index = []
+    for city in cities:
+        poly_url = f"{BBBIKE_BASE_URL}/{city}/{city}.poly"
+        try:
+            poly_resp = requests.get(poly_url, timeout=15)
+            poly_resp.raise_for_status()
+            geom = _parse_poly_file(poly_resp.text)
+            if geom is None or geom.is_empty:
+                continue
+            index.append({
+                "name": city,
+                "geometry": geom.__geo_interface__,
+                "pbf_url": f"{BBBIKE_BASE_URL}/{city}/{city}.osm.pbf",
+            })
+        except requests.RequestException:
+            continue
+
+    # Cache the index
+    with open(index_path, "w") as f:
+        json.dump(index, f)
+
+    print(f"BBBike index built: {len(index)} cities")
+    return index
+
+
+def _parse_bbbike_candidates(bbbike_index, aoi_geometry):
+    """Return candidate extracts from BBBike that fully contain the AOI."""
+    candidates = []
+    for entry in bbbike_index:
+        extract_geom = shape(entry["geometry"])
+        if extract_geom.contains(aoi_geometry):
+            candidates.append({
+                "source": "bbbike",
+                "name": entry["name"],
+                "url": entry["pbf_url"],
+                "size": None,  # unknown until we do a HEAD request
+            })
+    return candidates
+
+
+def _resolve_bbbike_sizes(candidates):
+    """Fill in file sizes for BBBike candidates via HEAD requests."""
+    for c in candidates:
+        if c["size"] is None:
+            try:
+                resp = requests.head(c["url"], allow_redirects=True, timeout=10)
+                c["size"] = int(resp.headers.get("Content-Length", float("inf")))
+            except (requests.RequestException, ValueError):
+                c["size"] = float("inf")
+    return candidates
+
+
+# ---------------------------------------------------------------------------
+# Unified lookup
+# ---------------------------------------------------------------------------
+
+def find_smallest_extract(aoi_geometry, data_dir="./data"):
+    """Find the smallest .osm.pbf extract containing the AOI.
+
+    Searches both Geofabrik and BBBike, returns the smallest candidate.
+    """
+    # Gather candidates from both sources
+    geofabrik_index = fetch_geofabrik_index(
+        cache_path=os.path.join(data_dir, "geofabrik_index.json")
+    )
+    bbbike_index = fetch_bbbike_index(
+        cache_dir=os.path.join(data_dir, "bbbike")
+    )
+
+    candidates = []
+    candidates.extend(_parse_geofabrik_candidates(geofabrik_index, aoi_geometry))
+    candidates.extend(_parse_bbbike_candidates(bbbike_index, aoi_geometry))
+
+    if not candidates:
+        raise ValueError(
+            "No extract from Geofabrik or BBBike fully contains the area of interest."
+        )
+
+    # Resolve sizes for BBBike candidates (Geofabrik sizes come from the index)
+    bbbike_candidates = [c for c in candidates if c["source"] == "bbbike"]
+    if bbbike_candidates:
+        _resolve_bbbike_sizes(bbbike_candidates)
+
+    candidates.sort(key=lambda x: x.get("size", float("inf")))
+
+    best = candidates[0]
+    print(f"Best extract: {best['name']} ({best['source']}) "
+          f"— {best['size'] / 1e6:.1f} MB")
+    return best
+
+
+# ---------------------------------------------------------------------------
+# Download with caching
+# ---------------------------------------------------------------------------
+
+def _get_expected_size(url):
+    """Get the file size from the server via a HEAD request."""
+    try:
+        resp = requests.head(url, allow_redirects=True, timeout=10)
+        resp.raise_for_status()
+        return int(resp.headers.get("Content-Length", 0))
+    except (requests.RequestException, ValueError):
+        return 0
+
+
+def is_extract_cached(dest_path, expected_size=None, url=None):
+    """Check if a valid .osm.pbf file already exists at dest_path."""
+    if not os.path.exists(dest_path):
+        return False
+
+    local_size = os.path.getsize(dest_path)
+    if local_size == 0:
+        return False
+
+    if expected_size is None and url:
+        expected_size = _get_expected_size(url)
+
+    if expected_size and expected_size > 0:
+        return local_size == expected_size
+
+    return True
+
+
+def download_extract(url, dest_path, expected_size=None):
+    """Download a .osm.pbf file, skipping if already cached."""
+    if is_extract_cached(dest_path, expected_size=expected_size, url=url):
+        print(f"Using cached extract: {dest_path} "
+              f"({os.path.getsize(dest_path) / 1e6:.1f} MB)")
+        return dest_path
+
+    print(f"Downloading {url}...")
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+
+    resp = requests.get(url, stream=True)
+    resp.raise_for_status()
+    total = int(resp.headers.get("Content-Length", 0))
+
+    downloaded = 0
+    with open(dest_path, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=8192):
+            f.write(chunk)
+            downloaded += len(chunk)
+            if total:
+                pct = downloaded / total * 100
+                print(f"\r  Progress: {pct:.1f}% "
+                      f"({downloaded / 1e6:.1f}/{total / 1e6:.1f} MB)",
+                      end="", flush=True)
+
+    print()
+    print(f"Download complete: {dest_path}")
+    return dest_path
+
 
 def get_country_centroids():
     """Utility function to obtain country centroids based on country name.

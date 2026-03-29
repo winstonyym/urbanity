@@ -3,7 +3,7 @@ set -euo pipefail           # safer defaults
 set -x                      # echo commands (remove if you prefer)
 
 # ──────────────────────────────────────────────────────────────
-PKG_VERSION="0.5.18"
+PKG_VERSION="0.5.19"
 CONDA_ENV="urbanity"
 
 # ────────── argument parsing ──────────
