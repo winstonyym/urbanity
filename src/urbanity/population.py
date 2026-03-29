@@ -131,7 +131,9 @@ def get_meta_population_data(country: str, bounding_poly = None, all_only=False)
     try:
         general_pop_dict[country]
     except KeyError:
-        print(f"Population data is not available for {country}. Please use utils.get_available_pop_countries function to view which countries are available.")
+        raise Exception(f"Population data is not available for {country}. Use: population_layer='ghs' instead. Please use utils.get_available_pop_countries function to view which countries are available.")
+
+    
     minx, miny, maxx, maxy = bounding_poly.bounds['minx'].min(), bounding_poly.bounds['miny'].min(), bounding_poly.bounds['maxx'].max(), bounding_poly.bounds['maxy'].max()
     
     if all_only: 

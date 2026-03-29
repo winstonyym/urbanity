@@ -941,7 +941,7 @@ EXTRACT_NAMES = [
     'Belgium', 'Belize', 'Benin', 'Bhutan', 'Bolivia',
     'Bosnia & Herzegovina', 'Botswana', 'Brazil', 'British Virgin Islands',
     'Brunei', 'Bulgaria', 'Burkina Faso', 'Burundi', 'Cabo Verde',
-    'Cambodia', 'Cameroon', 'Cayman Islands', 'Central African Republic',
+    'Cambodia', 'Cameroon', 'Cayman Islands', 'Central African Republic', 'China',
     'Chad', 'Chile', 'Colombia', 'Comoros', 'Congo',
     'Continent of Africa', 'Cook Islands', 'Costa Rica', 'Croatia',
     'Czechia', "Côte d'Ivoire", 'Democratic Republic of the Congo',
