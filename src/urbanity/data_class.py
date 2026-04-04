@@ -141,8 +141,6 @@ class UrbanGraph:
                 'plot_to_street': self.plot_to_street
             }
 
-            # Process for downstream tasks
-            self.geo_store = remove_non_numeric_columns_objects(self.geo_store, keep_geometry=True)
         else:
             print('Graph edges already initialized.')
 
@@ -162,7 +160,7 @@ class UrbanGraph:
                 if name == 'plot':
                     target_cols = ['street_id', 'bid']
                     for col in target_cols:
-                        npy_name = f"plot_{col}.npy"
+                        npy_name = f"plot_{col}.npy"    
                         arr = np.array(self.geo_store[name][col].to_list(), dtype=object)
                         np.save(npy_name, arr, allow_pickle=True)
                         z.write(npy_name, arcname=npy_name)
@@ -349,6 +347,8 @@ class UrbanGraph:
         data = HeteroData()
         objects_copy = self.geo_store.copy()
 
+        objects_copy = remove_non_numeric_columns_objects(objects_copy, keep_geometry=True)
+
         if target_value:
             assert len(target_value) == len(objects_copy[target_node]), "Groundtruth labels do not match length of entity. Missing values should be specified as None."
 
@@ -452,5 +452,5 @@ class UrbanGraph:
         return data
 
     def to_dgl():
-        pass
+        raise NotImplementedError("to_dgl() is not yet implemented")
     

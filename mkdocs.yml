@@ -1,0 +1,113 @@
+site_name: Urbanity
+site_description: Automated modelling and analysis of multidimensional networks in cities
+site_url: https://urbanity.readthedocs.io
+repo_url: https://github.com/winstonyym/urbanity
+repo_name: winstonyym/urbanity
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: assets/logo.png
+  favicon: assets/logo.png
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - search.suggest
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: installation.md
+    - Quickstart: quickstart.md
+    - Configuration: configuration.md
+  - Tutorials:
+    - 1. Getting Started: tutorials/getting-started.md
+    - 2. Street Networks: tutorials/street-networks.md
+    - 3. Urban Graphs: tutorials/urban-graphs.md
+    - 4. Graph Machine Learning: tutorials/graph-ml.md
+  - API Reference:
+    - Overview: api/index.md
+    - Map: api/map.md
+    - UrbanGraph: api/data_class.md
+    - Buildings: api/building.md
+    - Population: api/population.md
+    - Satellite & GEE: api/satellite.md
+    - Topology: api/topology.md
+    - Geometry: api/geometry.md
+    - Utilities: api/utils.md
+    - Visualisation: api/visualisation.md
+  - Community:
+    - Changelog: changelog.md
+    - Contributing: contributing.md
+    - Code of Conduct: conduct.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/winstonyym/urbanity
+      name: GitHub
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/urbanity/
+      name: PyPI
+  analytics:
+    provider: google
+    property: ""
+  version:
+    provider: mike
+
+extra_css:
+  - assets/extra.css

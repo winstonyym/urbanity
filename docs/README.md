@@ -40,34 +40,79 @@ Towards exploring complexities underlying urban systems and facilitating compara
 </br>
 
 ## Quickstart
-*How do I install Urbanity?*
 
-Urbanity is built on several geospatial packages (e.g., GeoPandas, ipyleaflet, rasterio, etc.,) that are best compiled through conda-forge. For seamless installation, we provide an environment.yml file for users to create their own conda environment. Please follow the steps below to ensure proper installation:
+### Installation
 
-1) Navigate to a location of choice (e.g., Desktop or project folder).
-2) Download environment.yml file and place it at the location of choice (Step 1).
-3) Open up a terminal/command prompt and input the following command:
+Urbanity depends on several geospatial libraries that are best installed through `conda-forge`. We provide an `environment.yml` to create a ready-to-use environment:
 
+```bash
+# 1. Clone the repository or download environment.yml
+git clone https://github.com/winstonyym/urbanity.git
+cd urbanity
+
+# 2. Create the conda environment
+conda env create -f environment.yml
+conda activate urbanity
+
+# 3. (Optional) Register a Jupyter kernel
+python -m ipykernel install --user --name=urbanity
+jupyter lab
 ```
-$ conda env create -f environment.yml
-$ conda activate urbanity
+
+### Three-line Demo
+
+```python
+from urbanity import Map
+
+m = Map(country='Singapore')
+m.add_polygon_boundary('tanjong_pagar.geojson')
+
+# Build a street network — OSM data is fetched automatically
+G, nodes, edges = m.get_street_network()
+
+# Build the full heterogeneous Urban Graph
+objects, connections = m.get_urban_graph()
 ```
 
-4) Installation completed and you should be able to use urbanity without issues.
+> **No manual OSM downloads required.** Urbanity automatically identifies the smallest Geofabrik or BBBike extract that covers your study area and caches it locally.
 
-(Optional) For JupyterLab / JupyterNotebook users, you can additionally add a notebook kernel via:
+### Visualisation
 
-```
-$ python -m ipykernel install --user --name=urbanity
-$ jupyter lab
+```python
+from urbanity.visualisation import (
+    plot_street_network,
+    plot_urban_graph_overview,
+    plot_buildings,
+    plot_node_attribute,
+    plot_network_centrality,
+)
+
+# Static dark-mode street network map
+fig = plot_street_network(nodes, edges, title='My City Street Network')
+
+# Four-panel overview of all UrbanGraph node types
+fig = plot_urban_graph_overview(objects)
+
+# Building footprint choropleth
+fig = plot_buildings(objects['building'], colname='bid_area')
+
+# Interactive 3-D PyDeck view
+from urbanity.visualisation import plot_graph
+plot_graph(objects, connections, node_type='building')
 ```
 
 </br>
 
 ## What can I do with Urbanity?
-We demonstrate how you can conduct a diverse range of urban analytical tasks (such as graph machine learning, network assortativity analysis, and benchmarking across cities) with Urbanity. Check out the documentation and examples/tutorials in the documentation site [examples](https://urbanity.readthedocs.io/en/latest/). 
 
-Sample dataset and notebooks to follow examples can be accessed at this [repository](https://github.com/winstonyym/urbanity_examples).
+We demonstrate how you can conduct a diverse range of urban analytical tasks (such as graph machine learning, network assortativity analysis, and benchmarking across cities) with Urbanity. Check out the documentation and tutorials:
+
+- **Tutorial 01** — [Getting Started](notebooks/01_getting_started): Map setup, boundaries, and the automated OSM download workflow.
+- **Tutorial 02** — [Street Networks](notebooks/02_street_network): Building and visualising street networks with centrality metrics.
+- **Tutorial 03** — [Urban Graph](notebooks/03_urban_graph): Constructing the full heterogeneous UrbanGraph and exploring its layers.
+- **Advanced** — [Network Assortativity](notebooks/network_assortativity) and [Graph ML](notebooks/transductive_graph_ml).
+
+Sample datasets and additional notebooks are available at this [repository](https://github.com/winstonyym/urbanity_examples).
 
 </br>
 

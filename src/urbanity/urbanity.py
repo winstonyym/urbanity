@@ -259,11 +259,16 @@ class Map(ipyleaflet.Map):
         
         # Obtain filepath to OSM data
         try:
-            fp = get_data(location, directory = self.directory)
-            print(f'Getting osm building data for {location}')
+            extract = find_smallest_extract(
+                aoi_geometry=self.polygon_bounds.geometry[0],
+                data_dir=self.directory,
+            )
+            filename = f"{extract['source']}_{os.path.basename(extract['url'])}"
+            fp = os.path.join(self.directory, filename)
+            download_extract(extract["url"], fp, expected_size=extract.get("size"))
+            print('Data extracted successfully. Checking OSM building attributes.')
         except ValueError:
-            fp = get_data(self.country, directory = self.directory)
-            print(f'ValueError: No pre-downloaded osm data available for {location}, will instead try for {self.country}.')
+            raise ValueError('No osm data found for specified location.')
         
         # Create dictionary keys based on column elements
         attr_stats = {}
@@ -472,15 +477,15 @@ class Map(ipyleaflet.Map):
         else:
             if network_filepath == '':
                 try:
-                    fp = get_data(self.location, directory = self.directory)
-                    print('Creating data folder and downloading osm street data...')
-                except ValueError:
-                    fp = get_data(self.country, directory = self.directory)
-                    print(f"ValueError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+                    extract = find_smallest_extract(
+                        aoi_geometry=self.polygon_bounds.geometry[0],
+                        data_dir=self.directory,
+                    )
+                    filename = f"{extract['source']}_{os.path.basename(extract['url'])}"
+                    network_filepath = os.path.join(self.directory, filename)
+                    download_extract(extract["url"], network_filepath, expected_size=extract.get("size"))
                 except ValueError:
                     raise ValueError('No osm data found for specified location.')
-
-                network_filepath = fp
                 print('Data extracted successfully. Proceeding to construct street network.')
 
             # Project and buffer original polygon to examine nodes outside boundary
@@ -489,10 +494,10 @@ class Map(ipyleaflet.Map):
                 buffered_tp = self.polygon_bounds.copy()
                 buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
                 buffered_bbox = buffered_tp.geometry.values[0]
-            # catch when it hasn't even been defined 
+            # catch when it hasn't even been defined
             except (AttributeError, NameError):
                 raise Exception('Please delimit a bounding box.')
-            
+
             # Obtain nodes and edges within buffered polygon
             data_root = './data/'
             if not os.path.exists(data_root):
@@ -512,7 +517,7 @@ class Map(ipyleaflet.Map):
 
             gdf_to_poly(self.polygon_bounds, poly_path, column='boundary_id')
             cmd = [
-                    "osmium", "extract", 
+                    "osmium", "extract",
                     "-p", poly_path,
                     network_filepath,
                     "-o", osm_path
@@ -521,7 +526,7 @@ class Map(ipyleaflet.Map):
             subprocess.run(cmd, capture_output=False, text=True)
 
             osm = pyrosm.OSM(osm_path, bounding_box=buffered_bbox)
-            
+
             nodes, edges = osm.get_network(network_type=network_type, nodes=True)
 
             # Build networkx graph for pre-processing
@@ -880,15 +885,15 @@ class Map(ipyleaflet.Map):
         else:
             if network_filepath == '':
                 try:
-                    fp = get_data(self.location, directory = self.directory)
-                    print('Creating data folder and downloading osm street data...')
-                except ValueError:
-                    fp = get_data(self.country, directory = self.directory)
-                    print(f"ValueError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+                    extract = find_smallest_extract(
+                        aoi_geometry=self.polygon_bounds.geometry[0],
+                        data_dir=self.directory,
+                    )
+                    filename = f"{extract['source']}_{os.path.basename(extract['url'])}"
+                    network_filepath = os.path.join(self.directory, filename)
+                    download_extract(extract["url"], network_filepath, expected_size=extract.get("size"))
                 except ValueError:
                     raise ValueError('No osm data found for specified location.')
-
-                network_filepath = fp
                 print('Data extracted successfully. Proceeding to construct street network.')
 
             # Project and buffer original polygon to examine nodes outside boundary
@@ -897,10 +902,10 @@ class Map(ipyleaflet.Map):
                 buffered_tp = self.polygon_bounds.copy()
                 buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
                 buffered_bbox = buffered_tp.geometry.values[0]
-            # catch when it hasn't even been defined 
+            # catch when it hasn't even been defined
             except (AttributeError, NameError):
                 raise Exception('Please delimit a bounding box.')
-            
+
             # Obtain nodes and edges within buffered polygon
             data_root = './data/'
             if not os.path.exists(data_root):
@@ -920,7 +925,7 @@ class Map(ipyleaflet.Map):
 
             gdf_to_poly(self.polygon_bounds, poly_path, column='boundary_id')
             cmd = [
-                    "osmium", "extract", 
+                    "osmium", "extract",
                     "-p", poly_path,
                     network_filepath,
                     "-o", osm_path
@@ -929,7 +934,7 @@ class Map(ipyleaflet.Map):
             subprocess.run(cmd, capture_output=False, text=True)
 
             osm = pyrosm.OSM(osm_path, bounding_box=buffered_bbox)
-            
+
         # Collect buildings from osm 
         buildings = osm.get_buildings()
 
@@ -1073,14 +1078,15 @@ class Map(ipyleaflet.Map):
         else:
             if filepath == '':
                 try:
-                    fp = get_data(location, directory = self.directory)
-                    print('Creating data folder and downloading osm street data...')
-                except ValueError:
-                    fp = get_data(self.country, directory = self.directory)
-                    print(f"ValueError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+                    extract = find_smallest_extract(
+                        aoi_geometry=self.polygon_bounds.geometry[0],
+                        data_dir=self.directory,
+                    )
+                    filename = f"{extract['source']}_{os.path.basename(extract['url'])}"
+                    fp = os.path.join(self.directory, filename)
+                    download_extract(extract["url"], fp, expected_size=extract.get("size"))
                 except ValueError:
                     raise ValueError('No osm data found for specified location.')
-
                 print('Data extracted successfully. Proceeding to construct street network.')
             elif filepath != '':
                 fp = filepath
@@ -1093,10 +1099,10 @@ class Map(ipyleaflet.Map):
                 buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
                 buffered_bbox = buffered_tp.geometry.values[0]
 
-            # catch when it hasn't even been defined 
+            # catch when it hasn't even been defined
             except (AttributeError, NameError):
                 raise Exception('Please delimit a bounding box.')
-            
+
             if temporal_network:
                 # Load global tile dataframe and fine overlapping grid
                 ghs_global_grid_path = pkg_resources.resource_filename('urbanity', 'ghs_data/global_ghs_grid.parquet')
@@ -1984,14 +1990,15 @@ class Map(ipyleaflet.Map):
 
         if filepath == '':
             try:
-                fp = get_data(location, directory = self.directory)
-                print('Creating data folder and downloading osm street data...')
-            except ValueError:
-                fp = get_data(self.country, directory = self.directory)
-                print(f"ValueError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+                extract = find_smallest_extract(
+                    aoi_geometry=self.polygon_bounds.geometry[0],
+                    data_dir=self.directory,
+                )
+                filename = f"{extract['source']}_{os.path.basename(extract['url'])}"
+                fp = os.path.join(self.directory, filename)
+                download_extract(extract["url"], fp, expected_size=extract.get("size"))
             except ValueError:
                 raise ValueError('No osm data found for specified location.')
-
             print('Data extracted successfully. Proceeding to extract contextual attributes for point locations.')
         elif filepath != '':
             fp = filepath
@@ -2491,14 +2498,15 @@ class Map(ipyleaflet.Map):
         start = time.time()
         if filepath == '':
             try:
-                fp = get_data(location, directory = self.directory)
-                print('Creating data folder and downloading osm street data...')
-            except ValueError:
-                fp = get_data(self.country, directory = self.directory)
-                print(f"KeyError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+                extract = find_smallest_extract(
+                    aoi_geometry=self.polygon_bounds.geometry[0],
+                    data_dir=self.directory,
+                )
+                filename = f"{extract['source']}_{os.path.basename(extract['url'])}"
+                fp = os.path.join(self.directory, filename)
+                download_extract(extract["url"], fp, expected_size=extract.get("size"))
             except ValueError:
                 raise ValueError('No osm data found for specified location.')
-
         elif filepath != '':
             fp = filepath
             print('Data found! Proceeding to construct street network.')
@@ -3143,14 +3151,15 @@ class Map(ipyleaflet.Map):
         else:
             if filepath == '':
                 try:
-                    fp = get_data(location, directory = self.directory)
-                    print('Creating data folder and downloading osm street data...')
-                except ValueError:
-                    fp = get_data(self.country, directory = self.directory)
-                    print(f"ValueError: No pre-downloaded osm data available for specified city, will instead try for specified country.")
+                    extract = find_smallest_extract(
+                        aoi_geometry=self.polygon_bounds.geometry[0],
+                        data_dir=self.directory,
+                    )
+                    filename = f"{extract['source']}_{os.path.basename(extract['url'])}"
+                    fp = os.path.join(self.directory, filename)
+                    download_extract(extract["url"], fp, expected_size=extract.get("size"))
                 except ValueError:
                     raise ValueError('No osm data found for specified location.')
-
                 print('Data extracted successfully. Proceeding to construct street network.')
             elif filepath != '':
                 fp = filepath
@@ -3162,7 +3171,7 @@ class Map(ipyleaflet.Map):
                 buffered_tp = self.polygon_bounds.copy()
                 buffered_tp['geometry'] = buffer_polygon(self.polygon_bounds, bandwidth=bandwidth)
                 buffered_bbox = buffered_tp.geometry.values[0]
-            # catch when it hasn't even been defined 
+            # catch when it hasn't even been defined
             except (AttributeError, NameError):
                 raise Exception('Please delimit a bounding box.')
 

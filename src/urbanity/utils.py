@@ -221,6 +221,7 @@ def find_smallest_extract(aoi_geometry, data_dir="./data"):
     candidates.sort(key=lambda x: x.get("size", float("inf")))
 
     best = candidates[0]
+    print(candidates)
     print(f"Best extract: {best['name']} ({best['source']}) "
           f"— {best['size'] / 1e6:.1f} MB")
     return best
@@ -606,36 +607,89 @@ def get_edges_along_plot(urban_plots, add_reverse=True):
     return edges_to_plot
 
 def get_plot_to_plot_edges(urban_plots, add_reverse=True):
-    """Helper function to generate network edges between urban plots and their adjacent plots.
+    """Generate plot-to-plot adjacency edges based on shared street boundaries.
 
-    Args:
-        urban_plots (gpd.GeoDataFrame): A geopandas dataframe consisting of Polygons where each row represents an urban plot. 
+    Two plots are considered neighbours if they share at least one street
+    segment (identified by ``street_id``).
 
-    Returns:
-        np.array: A (2, N) array where the first row corresponds to urban plots and the second row corresponds to adjacent urban plots that are connected by the same street. N is the number of edges between all urban plots in the network. 
-    """    
-    urban_plots_edges = urban_plots.explode('street_id')
+    The function guards against the outer encircling polygon that
+    ``shapely.ops.polygonize`` occasionally produces: that polygon has an
+    anomalously large number of bounding streets (it touches every outer-ring
+    segment) and would otherwise create spurious edges to every adjacent plot.
+    When a ``plot_area`` column is present, plots whose area exceeds the 99th
+    percentile *and* whose street count exceeds three standard deviations above
+    the mean are treated as artefacts and excluded before building the edge
+    list.
+
+    Parameters
+    ----------
+    urban_plots : geopandas.GeoDataFrame
+        Polygons where each row is an urban plot.  Must contain a
+        ``plot_id`` column and a list-valued ``street_id`` column.
+    add_reverse : bool, optional
+        If ``True`` (default), also return the reversed edge array so the
+        graph is undirected.
+
+    Returns
+    -------
+    np.ndarray
+        Plot-to-plot edge array of shape ``(2, N)``.
+    np.ndarray, optional
+        Reversed edge array of the same shape (only when
+        ``add_reverse=True``).
+    """
+    # ------------------------------------------------------------------
+    # Defensive filter: drop the outer encircling polygon artefact.
+    # It is characterised by having far more bounding streets than any
+    # real city block.  We use a two-condition check so legitimate large
+    # plots (parks, campuses) are not removed.
+    # ------------------------------------------------------------------
+    plots_work = urban_plots.copy()
+
+    # Count how many street segments bound each plot
+    street_counts = plots_work['street_id'].apply(
+        lambda x: len(x) if isinstance(x, (list, np.ndarray)) else 0
+    )
+    mean_sc  = street_counts.mean()
+    std_sc   = street_counts.std()
+    outlier_street_mask = street_counts > (mean_sc + 3 * std_sc)
+
+    if outlier_street_mask.any() and 'plot_area' in plots_work.columns:
+        # Only drop if the same plot is also in the top 1 % by area
+        area_threshold = plots_work['plot_area'].quantile(0.99)
+        outlier_area_mask = plots_work['plot_area'] >= area_threshold
+        drop_mask = outlier_street_mask & outlier_area_mask
+        if drop_mask.any():
+            n_dropped = drop_mask.sum()
+            print(f"[get_plot_to_plot_edges] Dropping {n_dropped} outer-envelope "
+                  f"polygon(s) (area >= {area_threshold:.0f} m² and "
+                  f"street count > {mean_sc + 3*std_sc:.1f}).")
+            plots_work = plots_work[~drop_mask].reset_index(drop=True)
+            # Re-index plot_id to keep it contiguous
+            plots_work['plot_id'] = plots_work.index
+
+    urban_plots_edges = plots_work.explode('street_id')
 
     neighbors_df = urban_plots_edges.merge(
-                    urban_plots_edges, 
-                    on='street_id', 
+                    urban_plots_edges,
+                    on='street_id',
                     suffixes=('', '_right')
                     )
-    
+
     neighbors_df = neighbors_df[neighbors_df['plot_id'] != neighbors_df['plot_id_right']]
     neighbors_df = neighbors_df[['plot_id', 'plot_id_right']].drop_duplicates()
 
-    # Step 4: Aggregate neighboring plot_ids
+    # Aggregate neighboring plot_ids
     neighbors_dict = neighbors_df.groupby('plot_id')['plot_id_right'].apply(list)
     neighbors_df = pd.DataFrame(data=neighbors_dict)
     neighbors_df.columns = ['nn_plot_ids']
 
-    urban_plots = urban_plots.merge(neighbors_df, on='plot_id')
+    plots_work = plots_work.merge(neighbors_df, on='plot_id')
 
     # Create adjacency matrix for connected plots.
     start_list = []
     end_list = []
-    for i, neighbours in enumerate(urban_plots['nn_plot_ids']):
+    for i, neighbours in enumerate(plots_work['nn_plot_ids']):
         for k in neighbours:
             start_list.append(i)
             end_list.append(k)

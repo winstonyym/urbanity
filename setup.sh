@@ -59,7 +59,7 @@ setup_conda_env () {
 
     # pip packages in one go
     conda run -n "$CONDA_ENV" uv pip install \
-    setuptools==68 rasterio==1.4.0 mapbox_vector_tile vt2geojson transformers
+    setuptools==68 rasterio==1.4.0 mapbox_vector_tile vt2geojson transformers mkdocs-material
 
     # ── 4. install backend ─────────────────────────────────────────────
     echo "Installing backend '$BACKEND' (Device: $GPU_TYPE)"
