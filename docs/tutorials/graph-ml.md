@@ -2,7 +2,7 @@
 
 ## Step 1 — Load a Pre-built City Graph
 
-To skip the build step, load a pre-computed Singapore graph directly from the [Global Urban Graph Dataset](https://figshare.com/articles/dataset/Global_Graph_Dataset/28852319):
+To skip the build step, load a pre-computed Singapore graph directly from the [Global Urban Graph Dataset](https://figshare.com/ndownloader/files/53940917):
 
 ```python
 import numpy as np
@@ -11,7 +11,7 @@ from urbanity.data_class import UrbanGraph
 import geopandas as gpd
 
 sg_graph = UrbanGraph()
-sg_graph.load_graph(filename='https://figshare.com/ndownloader/files/53940917')
+sg_graph.load_graph(filename='path_to_graph_file')
 sg_graph.initialize_edges(building_neighbours='knn', knn=3, distance=100)
 sg_graph
 ```
@@ -39,10 +39,10 @@ sg_graph.geo_store['building'].head(5)
 
 ## Step 2 — Load Training Labels
 
-Combine building use types from OpenStreetMap and the Singapore Building Benchmarking Dataset (BCA):
+Combine building use types from OpenStreetMap and the Singapore Building Benchmarking Dataset (BCA) - Download from [Labels](https://figshare.com/ndownloader/files/54728558)
 
 ```python
-target = gpd.read_file('https://figshare.com/ndownloader/files/54728558')
+target = gpd.read_file('path_to_label_file')
 
 category_mapping = [
     'Transportation', 'Mixed Use', 'Commercial', 'Institutional',

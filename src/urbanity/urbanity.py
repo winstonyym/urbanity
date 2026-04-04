@@ -1005,7 +1005,6 @@ class Map(ipyleaflet.Map):
 
     def get_street_network(
             self, 
-            location: str,
             filepath: str = '',
             bandwidth: int = 100,
             network_type: str = 'driving',
@@ -1029,7 +1028,6 @@ class Map(ipyleaflet.Map):
         *_attr arguments can be toggled on or off to allow computation of additional geographic information into networks.
 
         Args:
-            location (str): Accepts city name or country name to obtain OpenStreetMap data.
             filepath (str): If location is not available, user can specify path to osm.pbf file.
             bandwidth (int): Distance to extract information beyond network. Defaults to 100.
             network_type (str): Specified OpenStreetMap transportation mode. Defaults to 'driving'.

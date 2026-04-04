@@ -21,9 +21,9 @@ This opens an interactive `ipyleaflet` map. You can:
 ```
 m.add_bbox()
 ```
-- **Load a shapefile** — pass an existing GeoDataFrame directly (see below)
+- **Load a shapefile** — pass an existing GeoDataFrame directly (see below) [Shapefile](https://figshare.com/ndownloader/files/42515773)
 ```
-m.add_polygon_boundary('https://figshare.com/ndownloader/files/42515773')
+m.add_polygon_boundary('path_to_shapefile')
 ```
 
 !!! tip "Working in Jupyter"
@@ -34,7 +34,7 @@ To use an existing polygon assign it directly to the `polygon_bounds` properties
 ```python
 import geopandas as gpd
 
-boundary = gpd.read_file("my_shapefile.geojson")
+boundary = gpd.read_file('path_to_shapefile')
 G.polygon_bounds = boundary
 ```
 
