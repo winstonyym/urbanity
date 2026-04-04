@@ -1,6 +1,6 @@
 # Heterogeneous Urban Graphs
 
-This tutorial walks through constructing and visualising an `UrbanGraph`: a rich heterogeneous graph encoding four spatial node types and their inter-layer topology.
+This tutorial walks through constructing and visualising an `UrbanGraph`: a rich heterogeneous graph encoding four spatial node types and their inter-layer topology. Access shapefile here [Shapefile](https://figshare.com/ndownloader/files/42515773)
 
 | Node type | Geometry | Typical count |
 |-----------|----------|---------------|
@@ -27,8 +27,8 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 
 m = Map(country='Singapore')
-m.add_polygon_boundary('data/tanjong_pagar_singapore.geojson',
-                        layer_name='Tanjong Pagar')
+m.add_polygon_boundary('path_to_shapefile',
+                        layer_name='Downtown Core')
 print("Area (km²):", round(
     m.polygon_bounds.to_crs(m.polygon_bounds.estimate_utm_crs()).area.values[0] / 1e6, 3
 ))

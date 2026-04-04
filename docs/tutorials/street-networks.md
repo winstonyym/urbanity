@@ -1,6 +1,6 @@
 # Street Network Analysis
 
-This tutorial shows how to build a primal street network, inspect its attributes, compute centrality metrics, and visualise the results.
+This tutorial shows how to build a primal street network, inspect its attributes, compute centrality metrics, and visualise the results. Access shapefile here [Shapefile](https://figshare.com/ndownloader/files/42515773)
 
 ---
 
@@ -17,8 +17,7 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 
 m = Map(country='Singapore')
-m.add_polygon_boundary('data/tanjong_pagar_singapore.geojson',
-                        layer_name='Tanjong Pagar')
+m.add_polygon_boundary('path_to_shapefile')
 print("Boundary set:", m.polygon_bounds.geometry.iloc[0].geom_type)
 ```
 
@@ -77,7 +76,7 @@ Key edge columns include `length`, `street_num_buildings`, `street_mean_building
 ```python
 fig = plot_street_network(
     nodes, edges,
-    title='Tanjong Pagar Street Network',
+    title='Downtown Core Street Network',
     dark_mode=True,
 )
 plt.show()
